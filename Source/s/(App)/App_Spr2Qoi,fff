@@ -1,0 +1,119 @@
+; Save Sprite file as a QOI file
+;==================================================================================================
+
+
+err_escSave
+    DCD     17                            ; 17 = Lookup token in Messages file
+    DCB     "Esc", 0
+    ALIGN
+
+
+do_Spr2Qoi    FunctionSig                 ; Conversion routine Sprite -> QOI
+
+; On Entry:
+;  R3  = Length of Sprite line (Width in words (width*4)) or Length of Mask line
+;  R4  = Address of Mask
+;  R0/R6  = Height
+;  R12 = Pointer to workspace
+
+
+    MOV     R8,R0                         ; R8 = Height
+    MOV     R6,R4                         ; R6 = Address of Mask
+    MOV     R5,R3                         ; R5 = Length of Sprite line (Width in words (width*4)) or Length of Mask line
+
+    ; Calculate hourglass values (Divide Sprite height (in R0) by 100)
+    ; also enables Escape key if not creating a RISC OS 4 Module
+    ; and zero the Index array and insert starting pixel value into Index array
+    BL      init_hourglass                ; [in s.Hourglass_Index]
+
+
+;--------------------------- Initialise QOI header --------------------------------------;
+
+
+    ; Width and Height are stored in Big Endian in QOI file, so need swapping from Little Endian
+    LDR     R1,[R12,#QOI_Magic]
+    LDR     R4,[R12,#QOI_Width]
+    ;       R8 = Height
+    LDR     R9,[R12,#QOI_ChanColspc]
+
+    ; Swap endian (width)
+    ;REV   R2,R4                           ; ARMv6
+    EOR     R0,R4,R4,ROR#16
+    BIC     R0,R0,#&FF0000
+    MOV     R2,R4,ROR#8
+    EOR     R2,R2,R0,LSR#8
+
+    ; Swap endian (height)
+    ;REV   R3,R8                           ; ARMv6
+    EOR     R0,R8,R8,ROR#16
+    BIC     R0,R0,#&FF0000
+    MOV     R3,R8,ROR#8
+    EOR     R3,R3,R0,LSR#8
+
+    ; Write QOI Header
+    LDR     R10,[R12,#qoi_CacheAddr]      ; Address of cache for QOI
+    STMIA   R10,{R1,R2,R3,R9}
+
+    ; Set up QOI Workspace ...
+
+    ADD     R0,R10,#QOI_HEADER_SIZE       ; Written 16 bytes but header is only 14 bytes! so increment R10 here
+    STR     R0,[R12,#qoi_CachePtr]        ; Set address of where to write next byte
+
+    LDR     R0,[R12,#qoi_CacheFree]       ; Amount of space left in QOI cache
+    SUB     R0,R0,#QOI_HEADER_SIZE
+    STR     R0,[R12,#qoi_CacheFree]       ; Reduce amount of free space in QOI cache
+
+    LDR     R3,[R12,#qoi_DataSize]        ; Size of QOI data
+    SUB     R0,R3,#QOI_HEADER_SIZE
+    STR     R0,[R12,#qoi_DataSize]        ; Reduce amount of QOI data
+
+    STR     R10,[R12,#qoi_BufAddr]        ; Address of QOI buffer for memory calculations at end
+    STR     R3,[R12,#qoi_BufSize]         ; QOIsize%. Size of QOI file for memory calculations at end
+
+    ; If QOI file all in memory (including Header+footer) then add buffer address else is a file ptr
+    LDR     R0,[R12,#qoi_fhandle]         ; =0 if QOI is all in memory
+    CMP     R0,#0
+    MOV     R0,#QOI_HEADER_SIZE
+    ADDEQ   R0,R0,R10                     ; If storing whole file in memory then need to add the buffer address to qoiData%
+    STR     R0,[R12,#qoi_fptr]            ; Where we are in the QOI file (=start of QOI data)
+
+
+;--------------------------- Process Sprite pixels into QOI chunks ----------------------;
+
+
+    ; Once Sprite processed, will jump to App_Spr2Qoi_Exit
+
+    B       process_sprite
+
+
+App_Spr2Qoi_Exit                          ; On entry: R0 = Ptr to error block or error number
+
+    CMN     R1,#1
+    STREQ   R0,[R12,#err_state]           ; Store ptr to the error block if R0 <> 0 or Buffer OK if R0 = 0
+
+    CMP     R0,#0
+    MOVNE   R0,R1                         ; R1 = Buffer size required
+    MOV     R3,R0                         ; Preserve R0
+
+    ; Check for Escape pressed in case we missed it
+    SWI     OS_ReadEscapeState            ; C is set if Escape has been pressed
+    MOVCS   R0,#124                       ; If so, then call OS_Byte 124 to clear Esc condition
+    SWICS   OS_Byte
+
+    ; Restore Escape conditions to when we started
+    MOV     R0,#229
+    LDR     R1,[R12,#esc_state]           ; Current state (0=Enabled, <>0=Disabled)
+    MOV     R2,#0
+    SWI     OS_Byte
+
+    MOV     R0,R3                         ; Restore R0
+
+    SWI     XHourglass_Off
+
+    ; Exit, making sure V flag is clear
+    CMP     PC,#0
+    LDMFD   R13!,{R8-R12,PC}              ; Restore entry registers
+
+
+    END
+

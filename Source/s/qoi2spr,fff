@@ -1,0 +1,309 @@
+; Process a QOI chunk, returning Sprite pixel
+;==================================================================================================
+
+; On entry:
+; R12 = Workspace
+
+; On exit:
+; If R1 =  0 then R0 = Sprite pixel value in &AABBGGRR format
+; If R1 >  0 then R0 = Sprite pixel value in &AABBGGRR format, R1 = Run chunk value (1..61)
+; If R1 = -1 then R0 = Ptr to Error block
+; All other registers preserved
+
+
+qoi2spr     FunctionSig
+
+    STMFD   R13!,{R2-R11,R14}
+
+    ; Get current pixel value
+    LDR     R14,[R12,#pixel_start]
+
+
+; Registers:
+; R1  = QOI file handle
+; R8  = qoi_RunCount
+; R9  = qoi_fptr                          ; where we are in the QOI file
+; R10 = qoi_DataEnd
+; R11 = index
+; R12 = Start of workspace
+; R14 = current pixel
+
+
+  IF qoi_RunCount <= &FF
+    ADD     R2,R12,#qoi_RunCount
+  ELSE
+    ADD     R2,R12,#qoi_RunCount:AND:&FF00
+    ADD     R2,R2, #qoi_RunCount:AND:&00FF
+  ENDIF
+
+    LDMIA   R2,{R8-R10}                   ; qoi_RunCount, qoi_fptr, qoi_DataEnd
+
+
+    ; See if we're in the middle of a Run
+    CMP     R8,#0                         ; IF run > 0
+    SUBHI   R8,R8,#1                      ; THEN run -= 1
+    STRHI   R8,[R2]
+    MOVHI   R0,R14                        ; current pixel
+    MOVHI   R1,R8                         ; Run count
+
+    LDMHIFD R13!,{R2-R11,PC}              ; Return pixel value in R0 and Run count in R1
+
+
+    ; If run out of QOI chunks then return current pixel value to get to the size specified in width and height
+    CMP     R9,R10                        ; IF qoi_fptr < qoi_DataEnd THEN process QOI chunk
+    MOVHS   R0,R14                        ; ELSE return current pixel
+    MOVHS   R1,#0                         ; Not in a Run so return Run count 0
+
+    LDMHSFD R13!,{R2-R11,PC}              ; Return pixel value in R0
+
+
+
+  IF QOI_INDEX <= &FF
+    ADD     R11,R12,#QOI_INDEX            ; Start of Index array
+  ELSE
+    ADD     R11,R12,#QOI_INDEX:AND:&FF00
+    ADD     R11,R11,#QOI_INDEX:AND:&00FF
+  ENDIF
+
+    LDR     R1,[R12,#qoi_fhandle]         ; QOI file handle
+
+    ; If no file handle (=0) then whole of QOI file is in memory
+    CMP     R1,#0
+    LDREQB  R0,[R9],#1
+    BEQ     %FT02
+
+    ; If < 5 bytes in QOI cache then refill cache
+
+    LDR     R5,[R12,#qoi_CacheFree]       ; Get amount of data left in cache
+
+    CMP     R5,#5                         ; If < 5 bytes left then read in some more
+    LDRHS   R6,[R12,#qoi_CachePtr]        ; Get address of where to read next byte
+    BHS     %FT01
+
+    ; Read cache from disc - file pointer in R9
+    LDR     R6,[R12,#qoi_CacheAddr]       ; Get address of QOI cache - read next byte from here
+    LDR     R7,[R12,#cache_size]          ; Size of cache
+    MOV     R4,R9                         ; File pointer
+    MOV     R3,R7                         ; Amount of data to read
+    MOV     R2,R6
+    MOV     R0,#3
+    SWI     XOS_GBPB
+    MOVVS   R1,#-1
+    LDMVSFD R13!,{R2-R11,PC}              ; Error? then exit with R0 = Error block, R1 = -1
+
+    SUB     R5,R7,R3                      ; R5 = Amount of data in cache
+
+01
+    ; Read byte from cache
+    LDRB    R0,[R6],#1
+    SUB     R5,R5,#1                      ; Decrement how much data in cache
+    ADD     R9,R9,#1                      ; Increment where we are in the file
+    STR     R5,[R12,#qoi_CacheFree]       ; Update amount of data stored in cache
+    STR     R6,[R12,#qoi_CachePtr]        ; Update address of where to read next byte
+
+02
+    ; See what type of QOI chunk we are dealing with
+
+    CMP     R0,#QOI_OP_RGB                ; >= &FE
+    BLO     notRGB                        ; If < &FE then not RGB or RGBA chunk
+
+    ; Dealing with either a RGB or RGBA chunk
+
+    ; If no file handle then data is all in memory
+    CMP     R1,#0
+    BNE     %FT01
+
+    CMP     R0,#QOI_OP_RGB                ; >= &FE
+    LDRB    R3,[R9],#1                    ; R
+    LDRB    R2,[R9],#1                    ; G
+    LDRB    R0,[R9],#1                    ; B
+    LDRHIB  R4,[R9],#1                    ; A
+    B       %FT02
+
+
+01
+    CMP     R0,#QOI_OP_RGB                ; >= &FE
+    MOVEQ   R7,#3                         ; RGB  = 3 bytes to read
+    MOVHI   R7,#4                         ; RGBA = 4 bytes to read
+
+    LDRB    R3,[R6],#1                    ; R
+    LDRB    R2,[R6],#1                    ; G
+    LDRB    R0,[R6],#1                    ; B
+    LDRHIB  R4,[R6],#1                    ; A (if QOI_OP_RGBA% (&FF))
+    SUB     R5,R5,R7                      ; Decrement how much data in cache
+    ADD     R9,R9,R7                      ; Increment where we are in the file
+    STR     R5,[R12,#qoi_CacheFree]       ; Update amount of data stored in cache
+    STR     R6,[R12,#qoi_CachePtr]        ; Update address of where to read next byte
+
+02
+    MOVEQ   R4,R14,LSR#24                 ; Keep px.rgba.a unchanged if QOI_OP_RGB (&FE)
+
+    ; Put into AABBGGRR format
+    ORR     R0,R3,R0,LSL#16               ; R0  = 0,B, ,R
+    ORR     R2,R0,R2,LSL#8                ; R2  = 0,B,G,R
+    ORR     R14,R2,R4,LSL#24              ; R14 = A,B,G,R
+
+    B       storeIndex
+
+
+notRGB
+    ; OTHERWISE
+    ;   CASE (b1% AND QOI_MASK_2%) OF
+
+    ANDS    R7,R0,#QOI_MASK_2             ; R0 = b1%
+
+    ; index%() is word aligned            ; R0 = b1%
+    ; R11 = index
+    LDREQ   R14,[R11,R0,LSL#2]            ; pixel% = !(index%+(b1%*4))
+    MOVEQ   R1,#0                         ; R1 = Run count. Not in a Run so return R1 = 0
+    BEQ     storePixel
+
+
+    CMP     R7,#QOI_OP_DIFF               ; = &40
+    BEQ     opDiff
+
+    ; Is either a Run chunk (QOI_OP_RUN = &C0) repeating current pixel, or it's a Luma chunk (QOI_OP_LUMA = &80)
+    CMP     R7,#QOI_OP_LUMA               ; QOI_OP_LUMA= &80 / QOI_OP_RUN = &C0
+    ANDNE   R8,R0,#&3F                    ; R8 = run% = b1% AND &3F
+    MOVNE   R1,R8                         ; Run count
+    BNE     storePixel                    ; Current pixel already stored in Index so don't bother storing it again
+
+
+    ; Then it must be a Luma chunk
+
+opLuma                                    ; Uses 2 bytes
+
+    ; vg% = (b1% AND &3F) - 32
+    AND     R4,R0,#&3F
+    SUB     R4,R4,#32                     ; R4 = vg%
+
+    ; If no file handle then data is all in memory
+    CMP     R1,#0
+    LDREQB  R0,[R9],#1
+
+    ; Get 2nd Luma byte from cache
+    LDRNEB  R0,[R6],#1
+    SUBNE   R5,R5,#1                      ; Decrement how much data in cache
+    ADDNE   R9,R9,#1                      ; Increment where we are in the file
+    STRNE   R5,[R12,#qoi_CacheFree]       ; Update amount of data stored in cache
+    STRNE   R6,[R12,#qoi_CachePtr]        ; Update address of where to read next byte
+
+    ; r% = px%?0
+    MOV     R1,R0,LSR#4                   ; b2% >>> 4
+    AND     R1,R1,#&0F                    ; AND &0F
+    ADD     R1,R1,R4                      ; +vg%
+    SUB     R1,R1,#8                      ; -8
+    AND     R2,R14,#&FF                   ; R2 = r% = px%?0
+    ADD     R2,R2,R1                      ; r% += vg% - 8 + ((b2% >>> 4) AND &0F) ; px.rgba.r
+    AND     R2,R2,#&FF                    ; make sure it doesn't overflow byte value (byte wraparound)
+    BIC     R14,R14,#&FF                  ; clear px.rgba.r
+    ORR     R14,R14,R2                    ; pixel% += r%
+    ; g% = px%?1
+    MOV     R2,R14,LSR#8
+    AND     R2,R2,#&FF                    ; R2 = g% = px%?1
+    ADD     R2,R2,R4                      ; g% += vg% ; px.rgba.g
+    AND     R2,R2,#&FF                    ; make sure it doesn't overflow byte value (byte wraparound)
+    BIC     R14,R14,#&FF00                ; clear px.rgba.g
+    ORR     R14,R14,R2,LSL#8              ; pixel% += g% << 8
+    ; b% = px%?2
+    AND     R1,R0,#&0F                    ; b2% AND &0F
+    ADD     R1,R1,R4                      ; +vg%
+    SUB     R1,R1,#8                      ; -8
+    MOV     R2,R14,LSR#16
+    AND     R2,R2,#&FF                    ; R2 = b% = px%?2
+    ADD     R2,R2,R1                      ; b% += vg% - 8 + (b2% AND &0F) ; px.rgba.b
+    AND     R2,R2,#&FF                    ; make sure it doesn't overflow byte value (byte wraparound)
+    BIC     R14,R14,#&FF0000              ; clear px.rgba.b
+    ORR     R14,R14,R2,LSL#16             ; pixel% += b% << 16
+
+    B       storeIndex
+
+
+opDiff
+
+    ; r% = px%?0
+    MOV     R1,R0,LSR#4                   ; R1 = b1% >>> 4
+    AND     R1,R1,#&03                    ; AND &03
+    SUB     R1,R1,#2                      ; -2
+    AND     R4,R14,#&FF                   ; R4 = r% = px%?0
+    ADD     R4,R4,R1                      ; r% += ((b1% >>> 4) AND &03) - 2 ; px.rgba.r
+    AND     R4,R4,#&FF                    ; make sure it doesn't overflow byte value (byte wraparound)
+    BIC     R14,R14,#&FF                  ; clear px.rgba.r
+    ORR     R14,R14,R4                    ; pixel% += r%
+    ; g% = px%?1
+    MOV     R1,R0,LSR#2                   ; R1 = b1% >>> 2
+    AND     R1,R1,#&03                    ; AND &03
+    SUB     R1,R1,#2                      ; -2
+    MOV     R4,R14,LSR#8
+    AND     R4,R4,#&FF                    ; R4 = g% = px%?1
+    ADD     R4,R4,R1                      ; g% += ((b1% >>> 2) AND &03) - 2 ; px.rgba.g
+    AND     R4,R4,#&FF                    ; make sure it doesn't overflow byte value (byte wraparound)
+    BIC     R14,R14,#&FF00                ; clear px.rgba.g
+    ORR     R14,R14,R4,LSL#8              ; pixel% += g% << 8
+    ; b% = px%?2
+    AND     R1,R0,#&03                    ; R1 = b1% AND &03
+    SUB     R1,R1,#2                      ; -2
+    MOV     R4,R14,LSR#16
+    AND     R4,R4,#&FF                    ; R4 = b% = px%?2
+    ADD     R4,R4,R1                      ; b% += (b1% AND &03) - 2 ; px.rgba.b
+    AND     R4,R4,#&FF                    ; make sure it doesn't overflow byte value (byte wraparound)
+    BIC     R14,R14,#&FF0000              ; clear px.rgba.b
+    ORR     R14,R14,R4,LSL#16             ; pixel% += b% << 16
+
+    ; Drop through to storeIndex
+
+storeIndex
+
+    ; calculate FNqoi_colour_hash(pixel%)
+    ; =(COLOUR rgba.r*3 + COLOUR rgba.g*5 + COLOUR rgba.b*7 + COLOUR rgba.a*11) MOD 64
+    ; =((3 * C%?0) + (5 * C%?1) + (7 * C%?2) + (11 * C%?3)) AND 63
+    ; Using 3 registers - R0, R1, R4
+    AND     R1,R14,#&0000FF               ; R1 = r% = px?0
+    AND     R4,R14,#&00FF00               ; R4 = g% = px?1
+    ADD     R0,R1,R1,LSL#1                ; R0 = 3 * px?0
+    ADD     R1,R4,R4,LSL#2                ; R1 = 5 * px?1
+    ADD     R4,R0,R1,LSR#8                ; Running total in R4
+    AND     R0,R14,#&FF0000               ; R0 = b% = px?2
+    RSB     R1,R0,R0,LSL#3                ; R1 = 7 * px?2
+    ADD     R0,R4,R1,LSR#16               ; Running total now in R0
+    MOV     R4,R14,LSR#24                 ; R4 = a% = px?3
+    ADD     R1,R0,R4,LSL#3                ; R1 = 8 * a% ; Running total now in R1
+    ADD     R0,R1,R4,LSL#1                ;    + 2 * a% ; Running total now in R0
+    ADD     R1,R0,R4                      ;    + a%     ; Running total now in R1 (11 * a%)
+    AND     R0,R1,#63                     ; R0 = R1 MOD 64
+
+    STR     R14,[R11,R0,LSL#2]            ; !(index%+((FNqoi_colour_hash(pixel%) MOD 64)*4)) = pixel%
+
+    MOV     R1,#0                         ; Run count. Not in a Run so return 0
+
+
+    ; Drop through to storePixel
+
+storePixel
+
+; Save QOI processing data
+; R8  = qoi_RunCount
+; R9  = qoi_fptr
+; R14 = pixel
+
+
+  IF qoi_RunCount <= &FF
+    ADD     R2,R12,#qoi_RunCount
+  ELSE
+    ADD     R2,R12,#qoi_RunCount:AND:&FF00
+    ADD     R2,R2, #qoi_RunCount:AND:&00FF
+  ENDIF
+
+    STMIA   R2,{R8,R9}
+
+    MOV     R0,R14                        ; current_pixel
+
+    ; Store current pixel value for next time round
+    CMP     R8,#0                         ; Don't bother storing if in a Run (R8 > 0) as we've already done it
+    STREQ   R0,[R12,#pixel_start]
+
+    LDMFD   R13!,{R2-R11,PC}              ; Return pixel value in R0 and Run count in R1
+
+
+    END
+

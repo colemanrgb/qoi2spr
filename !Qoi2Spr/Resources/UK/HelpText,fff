@@ -1,0 +1,536 @@
+===============================================================================
+
+  ,ad8888ba,      ,ad8888ba,    88
+ d8"'    `"8b    d8"'    `"8b   88    Qoi2Spr : Convert QOI files into Sprites
+d8'        `8b  d8'        `8b  88              and vice versa
+88          88  88          88  88
+        88  8P  Y8,        ,8P  88    Version : 1.00 (27 Aug 2023)
+  aa     Y88P    Y8a.    .a8P   88              (C) Richard Coleman, 2023
+  `"Y8888Y"Y8a    `"Y8888Y"'    88
+
+
+           QOI2SPR is licensed under the terms of the MIT license
+
+===============================================================================
+
+Written in BASIC and Assembler, !Qoi2Spr allows conversion of images in the new
+"QOI" format to RISC OS Sprite files, and vice versa.
+
+The QOI filetype (&A61) and application name "Qoi2Spr" have been allocated by
+ROOL.
+
+The Quite OK Image (QOI) format, invented by Dominic Szablewski, is designed for
+fast, lossless image compression. The specification (listed below), reference
+code and example images can be found at https://qoiformat.org/
+
+This application conforms to version 1.0 2022-01-05 of the QOI specification.
+
+
+INSTALLATION
+===============================================================================
+
+Copy the application "!Qoi2Spr" into a suitable directory.
+
+To set the filetype of a QOI file downloaded from the Internet or from a Windows
+PC, add the following to your Mimemap file:
+    image/x-qoi		QOI		a61	.qoi
+
+
+HOW TO USE: THE DESKTOP
+===============================================================================
+
+To convert a QOI file (filetype &A61 "QOI") to a Sprite file, double click the
+file, or drag the file onto the application icon on the Iconbar. A SaveAs window
+will open with options relating to masks and Sprite DPI, and the filename will
+be set to the name of the file (any "/qoi" extension is removed). Set the
+filename and options as required and then simply drag the Sprite icon to where
+you want to save the Sprite file, or type in a path name and click the Save
+button.
+
+By default, none of the mask options are selected, though that can be overridden
+in the !Run file. See below for the various command line options available.
+
+The Sprite created will be a 32bpp Sprite (Type 6). If no options are selected
+in the SaveAs window, or if the 1bpp mask or 8bpp alpha mask is selected, then
+this will create a RISC OS 3.5 Sprite (with mask if selected). If the alpha
+channel option is selected then a RISC OS 5 Sprite will be created. The name of
+the Sprite will match the name of the file.
+
+If a mask is selected and the option to "Remove unused mask" is also selected
+then once the Sprite has been created if all the mask bits are solid then the
+mask will be removed from the Sprite.
+If the alpha channel option is selected and the option to "Remove unused mask"
+is also selected then the alpha channel will only be used if the QOI file has
+4 channels. The text for the option will change from "Remove unused mask" to
+"For 4 channel QOI only" to clarify it's purpose.
+
+The command line option -autoOpts will set the mask options according to the
+number of channels in the QOI file and the RISC OS version the programme is
+being run on. If the QOI file has 3 channels then no mask options will be
+selected including "Remove unused mask". Otherwise if the QOI has 4 channels
+then for RISC OS 3 and 4 this will be a 1bpp mask, and for RISC OS 6 this will
+be an 8bpp alpha mask, and for RISC OS 5 this will be an alpha channel. The
+option to remove an unused mask will also be selected. To stop this
+auto-selection remove the -autoOpts parameter in the !Run file.
+
+                                   -----
+
+To convert a Sprite file (filetype &FF9 "Sprite") to a QOI file, drag the Sprite
+onto the application icon on the Iconbar. A SaveAs window will open with options
+to Convert all Sprites, and to not add the /qoi extension.
+
+Only one file can be processed at a time in the Desktop and dragging a group of
+files to the application icon on the Iconbar will end up only processing the
+last file that is in the group. To process more than one file you will need to
+use the command line (Detailed below).
+
+The filename will default to the name of the Sprite file with "/qoi" appended.
+To temporarily prevent appending "/qoi", select the "No /qoi extension" option;
+to make it the default add the -noExt parameter to the !Run file.
+
+If there is only 1 Sprite in the file then the option to "Convert all Sprites"
+is disabled, but if there is more than 1 Sprite that can be converted then it
+will be enabled. By default, this option is selected and the QOI icon will
+change to a directory icon and the directory name will be the name of the
+Sprite file without "/qoi" appended.
+
+When you drag the directory to a Filer window each Sprite in the file will be
+converted to a QOI file within that directory, with or without the "/qoi"
+extension, depending on whether "No /qoi extension" has been selected or not.
+
+If the option to "Convert all Sprites" is not selected then only the first
+Sprite in the file will be converted to a QOI file. To change the default
+behaviour of converting all Sprites, remove the -all parameter in the !Run
+file.
+
+                                   -----
+
+If the file being created already exists then, unless -skip or -number options
+have been set in the !Run file (see below), you will be prompted as to the
+course of action to take: to Overwrite (Yes or No) or to Number the file which
+will append a number to the end of the filename. The number will start counting
+from 1 and keep going until a file with the name and number doesn't already
+exist.
+
+Pressing Escape will abandon the conversion of the file. Any file that is in the
+process of being created will be deleted.
+
+Clicking on the Iconbar icon will bring the SaveAs window to the front.
+
+
+HOW TO USE: THE COMMAND LINE
+===============================================================================
+
+QOI2SPR can also be run from the command line by using the alias "Qoi2Spr"
+either in a Taskwindow or outside of the Desktop.
+
+To display the options available just type "Qoi2Spr" at the command prompt.
+If you specify "-h" or "-help" then the following explanation of the various
+options will be displayed.
+
+Syntax: Qoi2Spr <source> <destination> [-force | -skip | -number] [-verbose]
+                [-da <N>] [-mask1 | -mask8 | -alpha] [-clean] [-autoOpts]
+                [-ex <N>] [-ey <N>] [-all] [-noExt]
+
+  <source>       Filename to convert, either QOI or Sprite. Wildcards may be used
+  <destination>  Filename to save converted <source> to. If -all specified then
+                 will be a directory
+  -force         Force overwriting of existing <destination>
+  -skip          Skip existing <destination>. Overrides -force
+  -number        If <destination> exists then append a number to the file being
+                 converted. Overrides -skip and -force
+  -verbose       Display information on files as they are processed
+  -da <N>        Use a Dynamic Area instead of Wimpslot. <N> is max size of
+                 Dynamic Area in Mb
+
+ Converting a QOI Image to a Sprite:
+  -mask1         Create a RISC OS 3.5 Sprite with a 1bpp mask
+  -mask8         Create a RISC OS 3.5 Sprite with an 8bpp alpha mask.
+                 Overrides -mask1
+  -alpha         Create a RISC OS 5 Sprite with an alpha channel instead of a
+                 mask. Overrides -mask1 and -mask8
+  -clean         With -mask1 or -mask8 will remove mask if all bits of the mask
+                 are solid. With -alpha will only use alpha channel if the QOI
+                 has 4 channels
+  -autoOpts      Set the mask and alpha channel options according to the number
+                 of channels in the QOI file. Overrides -mask1, -mask8, -alpha
+                 and -clean. Can be shortened to -auto
+  -ex <N>        Specify the X eigen value in <N> (where <N> is 0-3 or 180, 90,
+                 45, 22). Defaults to 1 (90 DPI)
+  -ey <N>        Specify the Y eigen value in <N> (where <N> is 0-3 or 180, 90,
+                 45, 22). Defaults to 1 (90 DPI)
+
+ Converting a Sprite to a QOI Image:
+  -all           If more than one Sprite in <source> then extract all Sprites in
+                 the file and save to directory <destination>
+  -noExt         Does not add the "/qoi" extension when creating a QOI file.
+                 Can be shortened to -e
+
+
+<source> may be a QOI file or a Sprite file. If wildcards are used then all
+matching files, with the same filetype as the first file found, will be
+processed. Any directories or Image files that match are ignored. If the
+filetype is QOI and more than one QOI file is being processed then any "/qoi"
+extension will be removed from the filename when converted to Sprite.
+
+If <source> is a QOI file, then it will be converted to a Sprite and saved as
+<destination>, and vice versa.
+
+Sprite files can contain more than one Sprite. If <source> is a Sprite file then
+just the first Sprite in the file will be converted to a QOI file, unless the
+parameter -all is specified and then each Sprite in the file will be converted
+to a QOI file and <destination> will be the name of the directory in which to
+save the QOI files.
+
+If wildcards are used in the leafname of <source> or the parameter -all is
+specified then <destination> will be taken to be a directory into which the
+files will be saved. If <source> is a Sprite file and both wildcards and the
+parameter -all is specified then <destination> will be the parent directory and
+each Sprite file will create a subdirectory into which to save the individual
+QOI files.
+
+The command line parameters, -verbose and -force, are ignored when in the
+Desktop, but the others can be included in the !Run file.
+
+The command line parameter -autoOpts is ignored when run outside of the Desktop
+or in a Taskwindow.
+
+The DPI values can be specified in eigen values 0-3 or in the actual DPI values
+of 180, 90, 45, and 22. If not specified or other values are given then the
+default of 90 is used. The DPI values are ignored when converting to QOI.
+
+By default, when a Sprite is converted to a QOI, the extension "/qoi" is
+appended to the QOI file unless it is already specified. To prevent this specify
+the -noExt parameter. This parameter is ignored if the <source> filetype is QOI
+as any "/qoi" extension is always removed if the <source> filetype is QOI.
+
+If the file being created already exists then, unless -force, -skip or -number
+options have been set, you will be prompted as to the course of action to take:
+"Overwrite, Skip, Number, Rename? (O/S/N/R)".
+  * Pressing the letter "O" will overwrite the file.
+  * Pressing "S" will skip over that file.
+  * Pressing "N" will write a new file with a number appended to the end of the
+    filename. The number will start counting from 1 and keep going until a file
+    with the name and number doesn't already exist.
+  * Pressing "R" will prompt for a new filename. When entering a new filename,
+    Qoi2Spr will not append "/qoi" to the filename even if -noExt has not been
+    specified. It will check whether the new file exists and prompt accordingly.
+
+Pressing Escape will abandon the conversion of the file. Any file that is in the
+process of being created will be deleted.
+
+Normally there is no information displayed showing what the application is doing
+unless it needs to prompt you to take some action. The -verbose parameter will
+provide information on the file being processed. This parameter is ignored when
+in the Desktop.
+
+
+MEMORY
+===============================================================================
+
+By default memory to hold the Sprite and the QOI file is taken from the
+application's Wimpslot, which is limited to 28Mb on non-RISC OS 5 systems (and
+on RISC OS 5 if Aemulor is active), or 512Mb on RISC OS 5.
+
+Using a Dynamic Area is recommended for non-RISC OS 5 systems.
+
+To use a Dynamic Area specify the -da parameter, followed by a non-zero positive
+number to specify the maximum size of the Dynamic Area in MB, eg: -da 64, to
+claim a maximum of 64MB. Memory is only claimed when loading the file to be
+converted and when the actual conversion takes place, and is released as soon as
+the conversion is complete. And so depending on what else you have running you
+might not be able to claim all that memory.
+
+The Dynamic Area is called "QOI 2 Sprite Heap".
+
+Prior to RISC OS 3.80 applications could set the maximum size of the Dynamic
+Area to the amount of memory in the machine. From RISC OS 3.80 clamps were set
+on the maximum size of a Dynamic Area to prevent applications trying to use all
+the memory. The default value is 128MB.
+
+Qoi2Spr will try and take as much memory as it can to do the conversion, using
+up to 3 cache buffers. You can restrict the amount of memory used by each cache
+buffer by setting the System Variable (Number) <Qoi2Spr$MaxCacheSize> to the
+value, in bytes, to be used; for example, to restrict each cache buffer to
+100Mb use:
+    SetEval Qoi2Spr$MaxCacheSize 100*1024*1024
+would force Qoi2Spr to only use up to 300Mb in total.
+The minimum amount that can be specified is 64Kb for each cache buffer.
+
+
+LIMITATIONS
+===============================================================================
+
+* Qoi2Spr can't read or create files larger than 2Gb.
+
+* Sprite extension areas are ignored.
+
+* For Sprite Types 5 and above, any palette is ignored.
+
+* I have not come across any Type 8 Sprites so have been unable to test these.
+
+* RISC OS versions prior to RISC OS 4 are unable to display Sprites with an 8bpp
+  alpha mask. So whilst this application will create such Sprites, when run on
+  RISC OS 3.71 and earlier, you wont be able to view them with that version of
+  !Paint.
+
+
+Unsupported Sprite types
+-----------------------------
+The following Sprite types are not supported:
+  * Type 9 (JPEG), Types 11-14, and Types above 16.
+  * RISC OS 5 CMYK Sprites which are not Sprite Type 7 but have Mode flag bit 12
+    set, though Type 7 Sprites are supported and converted to RGB.
+  * Where the Sprite Mode word is a pointer to a Mode Selector Block.
+  * Compressed Sprites.
+
+
+DPI
+-----------------------------
+When converting Sprites to QOI the DPI values are ignored. QOI files do not
+store the DPI of a Sprite, and so Qoi2Spr defaults to 90 DPI when converting a
+QOI to a Sprite. The DPI values can be set on the command line or in the SaveAs
+Sprite window.
+
+
+Spaces in filenames
+-----------------------------
+At the command line if you have a filename which includes spaces then Qoi2Spr
+will default to replacing those spaces with ASCII character 160 (Hard space).
+To not replace spaces or to use a different character you will need to change
+the variable FilenameSpcToNBSP% in the !RunImage file. Setting
+FilenameSpcToNBSP% = 0 will not replace spaces, setting it to any other ASCII
+value will replace spaces with that ASCII value if it is a valid filename
+character.
+
+
+Sprite names
+-----------------------------
+Sprite names can have characters that are not allowed in filenames: "$%^&*:@#\."
+If any of these characters are present then they are replaced with the
+underscore character.
+If the Sprite name has a ":" or a "." in it, and if the Sprite is dragged to the
+Qoi2Spr icon on the Iconbar, then the name will be truncated to after the colon
+or full stop. This is done by the application that is sending the Sprite to
+Qoi2Spr.
+
+
+Exporting a directory
+-----------------------------
+You can't export a directory of QOI files to another application, only to the
+Filer.
+
+
+QOI SPECIFICATION                                        Version 1.0 2022-01-05
+===============================================================================
+
+The QOI Specification fits on a single A4 sheet, and is available to download as
+a PDF from https://qoiformat.org/qoi-specification.pdf, and is reproduced here.
+
+
+A QOI file consists of a 14-byte header, followed by any number of data "chunks"
+and an 8-byte end marker.
+
+qoi_header {
+  char      magic[4];    // magic bytes "qoif"
+  uint32_t  width;       // image width in pixels (Big Endian)
+  uint32_t  height;      // image height in pixels (Big Endian)
+  uint8_t   channels;    // 3 = RGB, 4 = RGBA
+  uint8_t   colourspace; // 0 = sRGB with linear alpha, 1 = all channels linear
+};
+
+The colourspace and channel fields are purely informative. They do not change
+the way data chunks are encoded.
+
+Images are encoded row by row, left to right, top to bottom. The decoder and
+encoder start with {r: 0, g: 0, b: 0, a: 255} as the previous pixel value. An
+image is complete when all pixels specified by width * height have been covered.
+Pixels are encoded as:
+    * a run of the previous pixel
+    * an index into an array of previously seen pixels
+    * a difference to the previous pixel value in r,g,b
+    * full r,g,b or r,g,b,a values
+
+The colour channels are assumed to not be premultiplied with the alpha channel
+("un-premultiplied alpha").
+
+A running array[64] (zero-initialized) of previously seen pixel values is
+maintained by the encoder and decoder. Each pixel that is seen by the encoder
+and decoder is put into this array at the position formed by a hash function of
+the colour value. In the encoder, if the pixel value at the index matches the
+current pixel, this index position is written to the stream as QOI_OP_INDEX.
+
+The hash function for the index is:
+    index_position = (r * 3 + g * 5 + b* 7 + a * 11) % 64
+
+Each chunk starts with a 2-bit or 8-bit tag, followed by a number of data bits.
+The bit length of chunks is divisible by 8: ie all chunks are byte aligned.
+All values encoded in these data bits have the most significant bit on the left.
+The 8-bit tags have precedence over the 2-bit tags. A decoder must check for the
+presence of an 8-bit tag first.
+
+The byte stream's end is marked with seven "00" bytes followed by a single "01"
+byte.
+
+The possible chunks are:
+
+:-- QOI_OP_RGB --------------------:------------:------------:------------:
+:              Byte[0]             :   Byte[1]  :   Byte[2]  :   Byte[3]  :
+:   7   6   5   4   3   2   1   0  :   7 ... 0  :   7 ... 0  :   7 ... 0  :
+:----------------------------------+------------+------------+------------:
+:   1   1   1   1   1   1   1   0  :     red    :    green   :    blue    :
+:----------------------------------:------------:------------:------------:
+
+8-bit tag: b11111110
+8-bit   red channel value
+8-bit green channel value
+8-bit  blue channel value
+
+The alpha value remains unchanged from the previous pixel.
+
+
+
+:-- QOI_OP_RGBA -------------------:------------:------------:------------:------------:
+:              Byte[0]             :   Byte[1]  :   Byte[2]  :   Byte[3]  :   Byte[4]  :
+:   7   6   5   4   3   2   1   0  :   7 ... 0  :   7 ... 0  :   7 ... 0  :   7 ... 0  :
+:----------------------------------+------------+------------+------------+------------:
+:   1   1   1   1   1   1   1   1  :     red    :    green   :    blue    :    alpha   :
+:----------------------------------:------------:------------:------------:------------:
+
+8-bit tag: b11111111
+8-bit   red channel value
+8-bit green channel value
+8-bit  blue channel value
+8-bit alpha channel value
+
+
+
+:-- QOI_OP_INDEX ------------------:
+:              Byte[0]             :
+:   7   6   5   4   3   2   1   0  :
+:---------+------------------------:
+:   0   0 :          index         :
+:---------:------------------------:
+
+2-bit tag: b00
+6-bit index into the colour index array: 0..63
+
+A valid encoder must not issue 2 or more consecutive QOI_OP_INDEX chunks to the
+same index. QOI_OP_RUN should be used instead.
+
+
+
+:-- QOI_OP_DIFF -------------------:
+:              Byte[0]             :
+:   7   6   5   4   3   2   1   0  :
+:---------+-------+-------+--------:
+:   0   1 :   dr  :   dg  :   db   :
+:---------:-------:-------:--------:
+
+2-bit tag: b01
+2-bit   red channel difference from the previous pixel -2..1
+2-bit green channel difference from the previous pixel -2..1
+2-bit  blue channel difference from the previous pixel -2..1
+
+The difference to the current channel values are using a wraparound operation,
+so 1 - 2 will result in 255, while 255 + 1 will result in 0.
+
+Values are stored as unsigned integers with a bias of +2. Eg -2 is stored as 0
+(b00), 1 is stored as 3 (b11).
+
+The alpha value remains unchanged from the previous pixel.
+
+
+
+:-- QOI_OP_LUMA -------------------:----------------------------------:
+:              Byte[0]             :              Byte[1]             :
+:   7   6   5   4   3   2   1   0  :   7   6   5   4   3   2   1   0  :
+:-------- +------------------------:-----------------+----------------:
+:   1  0  :     diff green         :     dr - dg     :    db - dg     :
+:---------:------------------------:-----------------:----------------:
+
+2-bit tag: b10
+6-bit green channel difference from the previous pixel -32..31
+4-bit   red channel difference minus green channel difference -8..7
+4-bit  blue channel difference minus green channel difference -8..7
+
+The green channel is used to indicate the general direction of change and is
+encoded in 6 bits. The red and blue channels (dr and db) base their diffs off
+of the green channel difference, ie:
+
+    dr_dg = (cur_px.r - prev_px.r) - (cur_px.g - prev_px.g)
+    db_dg = (cur_px.b - prev_px.b) - (cur_px.g - prev_px.g)
+
+The difference to the current channel values are using a wraparound operation,
+so 10 - 13 will result in 253, while 250 + 7 will result in 1.
+
+Values are stored as unsigned integers with a bias of +32 for the green channel
+and a bias of +8 for the red and blue channels.
+
+The alpha value remains unchanged from the previous pixel.
+
+
+
+:-- QOI_OP_RUN --------------------:
+:              Byte[0]             :
+:   7   6   5   4   3   2   1   0  :
+:---------+------------------------:
+:   1   1 :          run           :
+:---------:------------------------:
+
+2-bit tag: b11
+6-bit run-length repeating the previous pixel: 1..62
+
+The run-length is stored with a bias of -1. Note that the run-lengths 63 and 64
+(b11111110 and b11111111) are illegal as they are occupied by the QOI_OP_RGB and
+QOI_OP_RGBA tags.
+
+
+ACKNOWLEDGMENTS
+===============================================================================
+
+The hardest part of this project was working out how to process the variety of
+Sprite types, especially types 0 to 4, whereas the actual conversion into the
+QOI format was very easy and straightforward.
+
+Thanks are due to Gerald Holdsworth for his info on Sprites and Lazarus source
+code (https://www.geraldholdsworth.co.uk), as well as the Lib RO Sprite source
+code (https://source.netsurf-browser.org/librosprite.git/), which have both been
+a great source of help in developing this application.
+
+The conversion routines are written in Assembler for speed with BASIC being
+used to load and validate files and provide the Wimp facilities, etc.
+
+
+SUPPORT
+===============================================================================
+
+For support queries or any other help with this software, please contact:
+    coleman@orpheusmail.co.uk
+
+
+LICENSE
+===============================================================================
+
+Copyright (c) 2023 Richard Coleman
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+===============================================================================
+

@@ -1,0 +1,44 @@
+===============================================================================
+
+  ,ad8888ba,      ,ad8888ba,    88
+ d8"'    `"8b    d8"'    `"8b   88  ConvertQOI : Convert QOI files into Sprites
+d8'        `8b  d8'        `8b  88               and vice versa
+88          88  88          88  88
+        88  8P  Y8,        ,8P  88    Version  : 1.00 (27 Aug 2023)
+  aa     Y88P    Y8a.    .a8P   88               (C) Richard Coleman, 2023
+  `"Y8888Y"Y8a    `"Y8888Y"'    88
+
+
+           ConvertQOI is licensed under the terms of the MIT license
+
+===============================================================================
+
+ConvertQOI is an ImageFileConverter module for converting images in the new
+"QOI" format to RISC OS Sprite files, and vice versa.
+
+The QOI filetype (&A61) and application name "Qoi2Spr" have been allocated by
+ROOL.
+
+The Quite OK Image (QOI) format, invented by Dominic Szablewski, is designed for
+fast, lossless image compression. The specification (listed below), reference
+code and example images can be found at https://qoiformat.org/
+
+This application conforms to version 1.0 2022-01-05 of the QOI specification.
+
+
+INSTALLATION
+===============================================================================
+
+Copy the "ConvertQOI" directory into !Boot.Choices.Users.Single.Boot.PreDesk, or
+wherever is appropriate for your setup.
+
+Then either double-click on ConvertQOI.!Run or reboot.
+
+To set the filetype of a QOI file downloaded from the Internet or from a Windows
+PC, add the following to your Mimemap file:
+    image/x-qoi		QOI		a61	.qoi
+
+
+
+Further information is available in the file ConvertQOI.Help
+

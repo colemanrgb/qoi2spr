@@ -1,0 +1,6 @@
+| Call BASSwitch to remove debug sections of code
+
+Echo
+Echo ... Using '%2' to create '%1' ...
+
+Do BASSwitch %0 %1 -S "%2" -R %*3

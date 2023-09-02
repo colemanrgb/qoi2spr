@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta  http-equiv="charset"      content="UTF-8" />
+    <meta  http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <meta  name="viewport"    content="width=device-width, initial-scale=1" />
+    <meta  name="author"      content="Richard Coleman" />
+    <meta  name="description" content="This is the help file for the application !Qoi2Spr which converts QOI files into Sprites and vice versa." />
+    <title>QOI to Sprite - Help</title>
+    <style>
+      .clearfix::after {
+        content: "";
+        clear: both;
+        display:table;
+      }
+      tr.ack th {
+        text-align: left;
+        padding: 0.15em;
+        border-collapse: collapse;
+        border: 2px solid #999;
+      }
+      tr.ack td {
+        padding: 0.15em;
+        border-collapse: collapse;
+        border: 2px solid #999;
+      }
+      table.hi tr:nth-child(even) {
+        background-color: #D6EEEE;
+      }
+      table.hi tr:hover {
+        background-color: #EEEED6;
+      }
+    </style>
+  </head>
+
+  <body style="background-color:#E8E8E8;">
+    <div style="text-align:center;">
+      <img src="qoi_logo.png" alt="QOI Logo" style="width:224px; height:110px; align:center;"> <!-- 448px x 220px -->
+    </div>
+    <div style="text-align:center;">
+      <h1>Qoi2Spr :<br>Convert QOI files into Sprites<br>and vice versa</h1>
+      <h2>Version : 1.00 (27 Aug 2023)<br>&copy; Richard Coleman, 2023</h2>
+      <p style="font-style:italic;">QOI2SPR is licensed under the terms of the <a href="#license" title="The Software License">MIT license</a></p>
+    </div>
+
+
+    <p class="clearfix" style="padding-top:1em; vertical-align:text-top;">
+    <img src="qoi2spr.png" alt="Qoi2Spr icon" style="width:68px; height:68px; padding-top:0.25em; padding-right:0.25em; float:left;"> <!-- 68px x 68px -->
+    Written in BASIC and Assembler, !Qoi2Spr allows conversion of images in the new &ldquo;QOI&rdquo; format to RISC OS Sprite files, and vice versa.<br>The QOI filetype (&amp;A61) and application name &ldquo;Qoi2Spr&rdquo; have been allocated by <a href="https://www.riscosopen.org/" title="External site: RISC OS Open Limited">ROOL</a>.</p><div style="clear:left;"></div>
+    <p class="clearfix" style="padding-top:1em; vertical-align:text-top;">
+    <img src="file_a61.png" alt="QOI file icon" style="width:68px; height:68px; padding-top:0.25em; padding-right:0.25em; float:left;"> <!-- 68px x 68px -->
+    The <abbr title="Quite OK Image">QOI</abbr> format, invented by Dominic Szablewski, is designed for fast, lossless image compression. The <a href="#qoi_spec" title="QOI Specification">specification below</a>, reference code and example images can be found at <a href="https://qoiformat.org/" title="External site, for more information on the QOI format">qoiformat.org</a>.<br>This application conforms to version 1.0 2022-01-05 of the <a href="https://qoiformat.org/qoi-specification.pdf" title="Download the QOI specification as a PDF">QOI specification</a>.</p><div style="clear:left;"></div>
+
+    <p><br></p>
+
+    <h2>Installation<br></h2><hr style="width:70%; text-align:left; margin-left:0;">
+
+    <p>Copy the application &ldquo;!Qoi2Spr&rdquo; into a suitable directory.</p>
+    <p>To set the filetype of a QOI file downloaded from the Internet or from a Windows PC, add the following to your Mimemap file:<br><code style="padding-left:2em;">image/x-qoi &nbsp; &nbsp;QOI &nbsp; &nbsp;a61 &nbsp; &nbsp;.qoi</code></p>
+
+
+    <p><br></p>
+
+    <h2>How To Use: The Desktop<br></h2><hr style="width:70%; text-align:left; margin-left:0;">
+    <div class="clearfix" style="padding-top:0em;">
+    <img src="qoi_saveas.png" alt="QOI SaveAs window" style="width:218px; height:377px; padding-top:0.25em; padding-right:0.25em; float:left;"> <!-- 218px x 377px -->
+
+    <p>To convert a QOI file (filetype &amp;A61 &ldquo;QOI&rdquo;) to a Sprite file, double click the file, or drag the file onto the application icon on the Iconbar. A SaveAs window will open with options relating to masks and Sprite DPI, and the filename will be set to the name of the file (any <code>/qoi</code> extension is removed). Set the filename and options as required and then simply drag the Sprite icon to where you want to save the Sprite file, or type in a path name and click the Save button.</p>
+
+    <p>By default, none of the mask options are selected, though that can be overridden in the !Run file. See below for the various <a href="#cmdline" title="How to use Qoi2Spr at the command line">command line</a> options available.</p>
+
+    <p>The Sprite created will be a 32bpp Sprite (Type 6). If no options are selected in the SaveAs window, or if the 1bpp mask or 8bpp alpha mask is selected, then this will create a RISC OS 3.5 Sprite (with mask if selected). If the alpha channel option is selected then a RISC OS 5 Sprite will be created. The name of the Sprite will match the name of the file.</p>
+
+    <p>If a mask is selected and the option to <code>Remove unused mask</code> is also selected then once the Sprite has been created if all the mask bits are solid then the mask will be removed from the Sprite. If the alpha channel option is selected and the option to <code>Remove unused mask</code> is also selected then the alpha channel will only be used if the QOI file has 4 channels. The text for the option will change from <code>Remove unused mask</code> to <code>For 4 channel QOI only</code> to clarify it&rsquo;s purpose.</p>
+
+    <p>The command line option <code>-autoOpts</code> will set the mask options according to the number of channels in the QOI file and the RISC OS version the programme is being run on. If the QOI file has 3 channels then no mask options will be selected including <code>Remove unused mask</code>. Otherwise if the QOI has 4 channels then for RISC OS 3 and 4 this will be a 1bpp mask, and for RISC OS 6 this will be an 8bpp alpha mask, and for RISC OS 5 this will be an alpha channel. The option to remove an unused mask will also be selected. To stop this auto-selection remove the <code>-autoOpts</code> parameter in the !Run file.</p>
+
+    </div><div style="clear:left; padding-top:0.05em;"></div>
+
+    <hr style="width:50%;">
+
+    <div class="clearfix" style="padding-top:0.05em;">
+    <img src="spr_saveas.png" alt="Sprite SaveAs window" style="width:204px; height:214px; padding-top:0.25em; padding-right:0.25em; float:left;"> <!-- 204px x 214px -->
+    <p>To convert a Sprite file (filetype &amp;FF9 &ldquo;Sprite&rdquo;) to a QOI file, drag the Sprite onto the application icon on the Iconbar. A SaveAs window will open with options to Convert all Sprites, and to not add the <code>/qoi</code> extension.</p>
+
+    <p>Only one file can be processed at a time in the Desktop and dragging a group of files to the application icon on the Iconbar will end up only processing the last file that is in the group. To process more than one file you will need to use the <a href="#cmdline" title="How to use Qoi2Spr at the command line">command line</a>.</p>
+
+    <p>The filename will default to the name of the Sprite file with <code>/qoi</code> appended. To temporarily prevent appending <code>/qoi</code>, select the <code>No /qoi extension</code> option; to make it the default add the <code>-noExt</code> parameter to the !Run file.</p>
+
+    <p>If there is only 1 Sprite in the file then the option to <code>Convert all Sprites</code> is disabled, but if there is more than 1 Sprite that can be converted then it will be enabled. By default, this option is selected and the QOI icon will change to a directory icon and the directory name will be the name of the Sprite file without <code>/qoi</code> appended.</p>
+
+    <p>When you drag the directory to a Filer window each Sprite in the file will be converted to a QOI file within that directory, with or without the <code>/qoi</code> extension, depending on whether <code>No /qoi extension</code> has been selected or not.</p>
+
+    <p>If the option to <code>Convert all Sprites</code> is not selected then only the first Sprite in the file will be converted to a QOI file. To change the default behaviour of converting all Sprites, remove the <code>-all</code> parameter in the !Run file.</p>
+
+    </div><div style="clear:left;"></div>
+
+    <hr style="width:50%;">
+
+    <p>If the file being created already exists then, unless <code>-skip</code> or <code>-number</code> options have been set on the <a href="#cmdline" title="How to use Qoi2Spr at the command line">command line</a>, you will be prompted as to the course of action to take: to Overwrite (Yes or No) or to Number the file which will append a number to the end of the filename. The number will start counting from 1 and keep going until a file with the name and number doesn&rsquo;t already exist.</p>
+
+    <p>Pressing &ldquo;Escape&rdquo; will abandon the conversion of the file. Any file that is in the process of being created will be deleted.</p>
+
+    <p>Clicking on the Iconbar icon will bring the SaveAs window to the front.</p>
+
+    <p><br></p>
+
+    <div style="visibility:hidden; height:1px;"><a name="cmdline" title="Command line usage"> <a></div>
+    <div id="cmdline"><h2>How To Use: The Command Line<br></h2><hr style="width:70%; text-align:left; margin-left:0;">
+
+    <p>QOI2SPR can also be run from the command line by using the alias &ldquo;Qoi2Spr&rdquo; either in a Taskwindow or outside of the Desktop.</p>
+
+    <p>To display the options available just type &ldquo;Qoi2Spr&rdquo; at the command prompt. If you specify <code>-h</code> or <code>-help</code> then the following explanation of the various options will be displayed.</p>
+
+    <table>
+      <thead>
+        <tr><th style="width:20%; text-align: left; vertical-align:text-top; padding: 0.15em; font-weight:normal;"><code><b>Syntax:</b><!-- &nbsp;Qoi2Spr --></code></th><th style="text-align: left; padding: 0.15em; font-weight:normal;"><code>&lt;source&gt; &lt;destination&gt; [-force | -skip | -number] [-verbose] [-da &lt;N&gt;] [-mask1 | -mask8 | -alpha] [-clean] [-autoOpts] [-ex &lt;N&gt;] [-ey &lt;N&gt;] [-all] [-noExt]</code></th></tr>
+      </thead>
+      <tbody><tr><td colspan="2">&nbsp;</td></tr></tbody>
+    </table>
+
+    <table class="hi" style="border-collapse:collapse;">
+      <thead>
+        <tr><th style="width:20%; text-align: left; padding: 0.15em;">Option:</th><th style="text-align: left; padding: 0.15em;">Description:</th></tr>
+      </thead>
+      <tbody>
+<tr><td style="vertical-align:text-top;"><code>&lt;source&gt;</code>     </td><td>Filename to convert, either QOI or Sprite. Wildcards may be used</td></tr>
+<tr><td style="vertical-align:text-top;"><code>&lt;destination&gt;</code></td><td>Filename to save converted &lt;source&gt; to. If <code>-all</code> specified then will be a directory</td></tr>
+<tr><td style="vertical-align:text-top;"><code>-force</code>             </td><td>Force overwriting of existing &lt;destination&gt;</td></tr>
+<tr><td style="vertical-align:text-top;"><code>-skip</code>              </td><td>Skip existing &lt;destination&gt;. Overrides <code>-force</code></td></tr>
+<tr><td style="vertical-align:text-top;"><code>-number</code>            </td><td>If &lt;destination&gt; exists then append a number to the file being converted. Overrides <code>-skip</code> and <code>-force</code></td></tr>
+<tr><td style="vertical-align:text-top;"><code>-verbose</code>           </td><td>Display information on files as they are processed</td></tr>
+<tr><td style="vertical-align:text-top;"><code>-da &lt;N&gt;</code>      </td><td>Use a Dynamic Area instead of Wimpslot. <code>&lt;N&gt;</code> is max size of Dynamic Area in Mb</td></tr>
+
+<tr><td style="font-weight:bold;" colspan="2">Converting a QOI Image to a Sprite:</td></tr>
+<tr><td style="vertical-align:text-top;"><code>-mask1</code>       </td><td>Create a RISC OS 3.5 Sprite with a 1bpp mask</td></tr>
+<tr><td style="vertical-align:text-top;"><code>-mask8</code>       </td><td>Create a RISC OS 3.5 Sprite with an 8bpp alpha mask. Overrides <code>-mask1</code></td></tr>
+<tr><td style="vertical-align:text-top;"><code>-alpha</code>       </td><td>Create a RISC OS 5 Sprite with an alpha channel instead of a mask. Overrides <code>-mask1</code> and <code>-mask8</code></td></tr>
+<tr><td style="vertical-align:text-top;"><code>-clean</code>       </td><td>With <code>-mask1</code> or <code>-mask8</code> will remove mask if all bits of the mask are solid. With <code>-alpha</code> will only use alpha channel if the QOI has 4 channels</td></tr>
+<tr><td style="vertical-align:text-top;"><code>-autoOpts</code>    </td><td>Set the mask and alpha channel options according to the number of channels in the QOI file. Overrides <code>-mask1</code>, <code>-mask8</code>, <code>-alpha</code> and <code>-clean</code>. Can be shortened to <code>-auto</code></td></tr>
+<tr><td style="vertical-align:text-top;"><code>-ex &lt;N&gt;</code></td><td>Specify the X eigen value in <code>&lt;N&gt;</code> (where <code>&lt;N&gt;</code> is 0-3 or 180, 90, 45, 22). Defaults to 1 (90 DPI)</td></tr>
+<tr><td style="vertical-align:text-top;"><code>-ey &lt;N&gt;</code></td><td>Specify the Y eigen value in <code>&lt;N&gt;</code> (where <code>&lt;N&gt;</code> is 0-3 or 180, 90, 45, 22). Defaults to 1 (90 DPI)</td></tr>
+
+<tr><td style="font-weight:bold;" colspan="2">Converting a Sprite to a QOI Image:</td></tr>
+<tr><td style="vertical-align:text-top;"><code>-all</code>   </td><td>If more than one Sprite in &lt;source&gt; then extract all Sprites in the file and save to directory &lt;destination&gt;</td></tr>
+<tr><td style="vertical-align:text-top;"><code>-noExt</code> </td><td>Does not add the <code>/qoi</code> extension when creating a QOI file. Can be shortened to <code>-e</code></td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <p>&lt;source&gt; may be a QOI file or a Sprite file. If wildcards are used then all matching files, with the same filetype as the first file found, will be processed. Any directories or Image files that match are ignored. If the filetype is QOI and more than one QOI file is being processed then any <code>/qoi</code> extension will be removed from the filename when converted to Sprite.</p>
+
+    <p>If &lt;source&gt; is a QOI file, then it will be converted to a Sprite and saved as &lt;destination&gt;, and vice versa.</p>
+
+    <p>Sprite files can contain more than one Sprite. If &lt;source&gt; is a Sprite file then just the first Sprite in the file will be converted to a QOI file, unless the parameter <code>-all</code> is specified and then each Sprite in the file will be converted to a QOI file and &lt;destination&gt; will be the name of the directory in which to save the QOI files.</p>
+
+    <p>If wildcards are used in the leafname of &lt;source&gt; or the parameter <code>-all</code> is specified then &lt;destination&gt; will be taken to be a directory into which the files will be saved. If &lt;source&gt; is a Sprite file and both wildcards and the parameter <code>-all</code> is specified then &lt;destination&gt; will be the parent directory and each Sprite file will create a subdirectory into which to save the individual QOI files.</p>
+
+    <p>The command line parameters, <code>-verbose</code> and <code>-force</code>, are ignored when in the Desktop, but the others can be included in the !Run file.</p>
+
+    <p>The command line parameter <code>-autoOpts</code> is ignored when run outside of the Desktop or in a Taskwindow.</p>
+
+    <p>The DPI values can be specified in eigen values 0-3 or in the actual DPI values of 180, 90, 45, and 22. If not specified or invalid values are given then the default of 90 is used. The DPI values are ignored when converting to QOI.</p>
+
+    <p>By default when a Sprite is converted to a QOI, the extension <code>/qoi</code> is appended to the QOI file unless it is already specified. To prevent this specify the <code>-noExt</code> parameter. This parameter is ignored if the &lt;source&gt; filetype is QOI as any <code>/qoi</code> extension is always removed if the &lt;source&gt; filetype is QOI.</p>
+
+    <p>If the file being created already exists then, unless <code>-force</code>, <code>-skip</code> or <code>-number</code> options have been set, you will be prompted as to the course of action to take: &ldquo;Overwrite, Skip, Number, Rename? (O/S/N/R)&rdquo;.
+    <ul style="margin-top:-0.5em;">
+      <li>Pressing the letter &ldquo;O&rdquo; will overwrite the file.</li>
+      <li>Pressing &ldquo;S&rdquo; will skip over that file.</li>
+      <li>Pressing &ldquo;N&rdquo; will write a new file with a number appended to the end of the filename. The number will start counting from 1 and keep going until a file with the name and number doesn&rsquo;t already exist.</li>
+      <li>Pressing &ldquo;R&rdquo; will prompt for a new filename. When entering a new filename, Qoi2Spr will not append <code>/qoi</code> to the filename even if <code>-noExt</code> has not been specified. It will check whether the new file exists and prompt accordingly.</li>
+    </ul></p>
+
+    <p>Pressing &ldquo;Escape&rdquo; will abandon the conversion of the file. Any file that is in the process of being created will be deleted.</p>
+
+    <p>Normally there is no information displayed showing what the application is doing unless it needs to prompt you to take some action. The <code>-verbose</code> parameter will provide information on the file being processed. This parameter is ignored when in the Desktop.</p>
+
+
+    <p><br></p>
+
+    <h2>Memory<br></h2><hr style="width:70%; text-align:left; margin-left:0;">
+
+    <p>By default memory to hold the Sprite and the QOI file is taken from the application&rsquo;s Wimpslot, which is limited to 28Mb on non-RISC OS 5 systems (and on RISC OS 5 if Aemulor is active), or 512Mb on RISC OS 5.</p>
+
+    <p>Using a Dynamic Area is recommended for non-RISC OS 5 systems.</p>
+
+    <p>To use a Dynamic Area specify the <code>-da</code> parameter, followed by a non-zero positive number to specify the maximum size of the Dynamic Area in MB, eg: <code>-da 64</code>, to claim a maximum of 64MB. Memory is only claimed when loading the file to be converted and when the actual conversion takes place, and is released as soon as the conversion is complete. And so depending on what else you have running you might not be able to claim all that memory.</p>
+
+    <p>The Dynamic Area is called &ldquo;QOI 2 Sprite Heap&rdquo;.</p>
+
+    <p>Prior to RISC OS 3.80 applications could set the maximum size of the Dynamic Area to the amount of memory in the machine. From RISC OS 3.80 clamps were set on the maximum size of a Dynamic Area to prevent applications using up all the memory. The default clamp value is 128MB.</p>
+
+    <p>Qoi2Spr will try and take as much memory as it can to do the conversion, using up to 3 cache buffers. You can restrict the amount of memory used by each cache buffer by setting the System Variable (Number) <code>&lt;Qoi2Spr$MaxCacheSize&gt;</code> to the value, in bytes, to be used; for example, to restrict each cache buffer to 100Mb use:<br>
+    <code style="padding:2em;">SetEval Qoi2Spr$MaxCacheSize 100*1024*1024</code><br>
+would force Qoi2Spr to only use up to 300Mb in total. The minimum amount that can be specified is 64Kb for each cache buffer.</p>
+
+
+    <p><br></p>
+
+    <h2>Limitations<br></h2><hr style="width:70%; text-align:left; margin-left:0;">
+
+    <ul>
+      <li> Qoi2Spr can&rsquo;t read or create files larger than 2Gb.</li>
+
+      <li>Sprite extension areas are ignored.</li>
+
+      <li>For Sprite Types 5 and above, any palette is ignored.</li>
+
+      <li>I have not come across any Type 8 Sprites so have been unable to test these.</li>
+
+      <li>RISC OS versions prior to RISC OS 4 are unable to display Sprites with an 8bpp alpha mask. So whilst this application will create such Sprites, when run on RISC OS 3.71 and earlier, you wont be able to view them with that version of !Paint.</li>
+    </ul>
+
+    <h3>Unsupported Sprite types</h3>
+
+    <p style="margin-top:-0.5em;">The following Sprite types are not supported:
+    <ul style="margin-top:-0.5em;">
+      <li>Type 9 (JPEG), Types 11-14, and Types above 16.</li>
+      <li>RISC OS 5 CMYK Sprites which are not Sprite Type 7 but have Mode flag bit 12 set, though Type 7 Sprites are supported and converted to RGB.</li>
+      <li>Where the Sprite Mode word is a pointer to a Mode Selector Block.</li>
+      <li>Compressed Sprites.</li>
+    </ul></p>
+
+    <h3>DPI</h3>
+
+    <p style="margin-top:-0.5em;">When converting Sprites to QOI the DPI values are ignored. QOI files do not store the DPI of a Sprite, and so Qoi2Spr defaults to 90 DPI when converting a QOI to a Sprite. The DPI values can be set on the command line or in the SaveAs Sprite window.</p>
+
+    <h3>Spaces in filenames</h3>
+
+    <p style="margin-top:-0.5em;">At the command line if you have a filename which includes spaces then Qoi2Spr will default to replacing those spaces with ASCII character 160 (Hard space). To not replace spaces or to use a different character you will need to change the variable <code>FilenameSpcToNBSP%</code> in the !RunImage file. Setting <code>FilenameSpcToNBSP% = 0</code> will not replace spaces, setting it to any other ASCII value will replace spaces with that ASCII value if it is a valid filename character.</p>
+
+    <h3>Sprite names</h3>
+
+    <p style="margin-top:-0.5em;">Sprite names can have characters that are not allowed in filenames: &ldquo;<code>$%^&*:@#\.</code>&rdquo;. If any of these characters are present then they are replaced with the underscore character.<br>If the Sprite name has a &ldquo;:&rdquo; or a &ldquo;.&rdquo; in it, and if the Sprite is dragged to the Qoi2Spr icon on the Iconbar, then the name will be truncated to after the colon or full stop. This is done by the application that is sending the Sprite to Qoi2Spr.</p>
+
+    <h3>Exporting a directory</h3>
+
+    <p style="margin-top:-0.5em;">You can&rsquo;t export a directory of QOI files to another application, only to the Filer.</p>
+
+
+    <p><br></p>
+
+    <div style="visibility:hidden; height:1px;"><a name="qoi_spec" title="QOI Specification"> <a></div>
+    <div id="qoi_spec"><h2>QOI Specification&nbsp; &nbsp;<span style="font-style:italic; font-size:75%;">(Version 1.0 2022-01-05)</span><br></h2><hr style="width:70%; text-align:left; margin-left:0;"></div>
+
+    <p style="margin-top:-0.05em;">The QOI Specification fits on a single A4 sheet, and is available to <a href="https://qoiformat.org/qoi-specification.pdf" title="Download the QOI specification as a PDF">download</a>, and is reproduced here.</p>
+
+    <p>A QOI file consists of a 14-byte header, followed by any number of data &ldquo;chunks&rdquo; and an 8-byte end marker.</p>
+    <ul style="margin-top:-0.5em;"><code>
+      qoi_header {<ul style="list-style-type:none;">
+        <li>char      magic[4];    // magic bytes &ldquo;qoif&rdquo;</li>
+        <li>uint32_t  width;       // image width in pixels (Big Endian)</li>
+        <li>uint32_t  height;      // image height in pixels (Big Endian)</li>
+        <li>uint8_t   channels;    // 3 = RGB, 4 = RGBA</li>
+        <li>uint8_t   colourspace; // 0 = sRGB with linear alpha, 1 = all channels linear</li>
+      </ul>
+      };</code></ul>
+
+    <p>The colourspace and channel fields are purely informative. They do not change the way data chunks are encoded.</p>
+
+    <p>Images are encoded row by row, left to right, top to bottom. The decoder and encoder start with <code>{r: 0, g: 0, b: 0, a: 255}</code> as the previous pixel value. An image is complete when all pixels specified by width * height have been covered. Pixels are encoded as:
+    <ul style="margin-top:-0.5em;">
+      <li>a run of the previous pixel</li>
+      <li>an index into an array of previously seen pixels</li>
+      <li>a difference to the previous pixel value in r,g,b</li>
+      <li>full r,g,b or r,g,b,a values</li>
+    </ul></p>
+
+    <p>The colour channels are assumed to not be premultiplied with the alpha channel (&ldquo;un-premultiplied alpha&rdquo;).</p>
+
+    <p>A running array[64] (zero-initialized) of previously seen pixel values is maintained by the encoder and decoder. Each pixel that is seen by the encoder and decoder is put into this array at the position formed by a hash function of the colour value. In the encoder, if the pixel value at the index matches the current pixel, this index position is written to the stream as QOI_OP_INDEX.</p>
+
+    <p>The hash function for the index is:<ul style="margin-top:-0.5em;"><code>
+    index_position = (r * 3 + g * 5 + b* 7 + a * 11) % 64</code></ul></p>
+
+    <p>Each chunk starts with a 2-bit or 8-bit tag, followed by a number of data bits. The bit length of chunks is divisible by 8: ie all chunks are byte aligned. All values encoded in these data bits have the most significant bit on the left. The 8-bit tags have precedence over the 2-bit tags. A decoder must check for the presence of an 8-bit tag first.</p>
+
+    <p>The byte stream&rsquo;s end is marked with seven &ldquo;00&rdquo; bytes followed by a single &ldquo;01&rdquo; byte.</p>
+
+    <p>The possible chunks are:</p>
+
+    <p style="font-weight:bold;">QOI_OP_RGB</p>
+    <table style="border-collapse:collapse; width:70%; margin-left:3em; margin-top:-1em;">
+      <thead style="border:1px solid #000; border-bottom:none;">
+        <tr><th style="width:40%;">Byte[0]</th><th style="width:20%; border-left:1px solid #000; border-right:1px solid #000;">Byte[1]</th><th style="width:20%; border-left:1px solid #000; border-right:1px solid #000;">Byte[2]</th><th style="width:20%;">Byte[3]</th></tr>
+      </thead>
+      <tbody>
+        <tr style="text-align:center; border-left:1px solid #000; border-right:1px solid #000;"><td>7 &nbsp; &nbsp; 6 &nbsp; &nbsp; 5 &nbsp; &nbsp; 4 &nbsp; &nbsp; 3 &nbsp; &nbsp; 2 &nbsp; &nbsp; 1 &nbsp; &nbsp; 0</td><td style="border-left:1px solid #000; border-right:1px solid #000;">7 ... 0</td><td style="border-left:1px solid #000; border-right:1px solid #000;">7 ... 0</td><td>7 ... 0</td></tr>
+        <tr style="text-align:center; border:1px solid #000; background-color: #EEEED6;"><td>1 &nbsp; &nbsp; 1 &nbsp; &nbsp; 1 &nbsp; &nbsp; 1 &nbsp; &nbsp; 1 &nbsp; &nbsp; 1 &nbsp; &nbsp; 1 &nbsp; &nbsp; 0</td><td style="border-left:1px solid #000; border-right:1px solid #000;">red</td><td style="border-left:1px solid #000; border-right:1px solid #000;">green</td><td>blue</td></tr>
+      </tbody>
+    </table>
+
+    <p style="margin-left:3em; margin-top:0.5em; padding-bottom:2em;">8-bit tag: b11111110<br>
+       8-bit red channel value<br>
+       8-bit green channel value<br>
+       8-bit blue channel value<br>
+    The alpha value remains unchanged from the previous pixel.</p>
+
+
+    <p style="font-weight:bold;">QOI_OP_RGBA</p>
+    <table style="border-collapse:collapse; width:70%; margin-left:3em; margin-top:-1em;">
+      <thead style="border:1px solid #000; border-bottom:none;">
+        <tr><th style="width:40%;">Byte[0]</th><th style="width:15%; border-left:1px solid #000; border-right:1px solid #000;">Byte[1]</th><th style="width:15%; border-left:1px solid #000; border-right:1px solid #000;">Byte[2]</th><th style="width:15%; border-right:1px solid #000;">Byte[3]</th><th style="width:15%;">Byte[4]</th></tr>
+      </thead>
+      <tbody>
+        <tr style="text-align:center; border-left:1px solid #000; border-right:1px solid #000;"><td>7 &nbsp; &nbsp; 6 &nbsp; &nbsp; 5 &nbsp; &nbsp; 4 &nbsp; &nbsp; 3 &nbsp; &nbsp; 2 &nbsp; &nbsp; 1 &nbsp; &nbsp; 0</td><td style="border-left:1px solid #000; border-right:1px solid #000;">7 ... 0</td><td style="border-left:1px solid #000; border-right:1px solid #000;">7 ... 0</td><td style="border-right:1px solid #000;">7 ... 0</td><td>7 ... 0</td></tr>
+        <tr style="text-align:center; border:1px solid #000; background-color: #EEEED6;"><td>1 &nbsp; &nbsp; 1 &nbsp; &nbsp; 1 &nbsp; &nbsp; 1 &nbsp; &nbsp; 1 &nbsp; &nbsp; 1 &nbsp; &nbsp; 1 &nbsp; &nbsp; 1</td><td style="border-left:1px solid #000; border-right:1px solid #000;">red</td><td style="border-left:1px solid #000; border-right:1px solid #000;">green</td><td style="border-right:1px solid #000;">blue</td><td>alpha</td></tr>
+      </tbody>
+    </table>
+
+    <p style="margin-left:3em; margin-top:0.5em; padding-bottom:2em;">8-bit tag: b11111111<br>
+       8-bit red channel value<br>
+       8-bit green channel value<br>
+       8-bit blue channel value<br>
+       8-bit alpha channel value</p>
+
+
+    <p style="font-weight:bold;">QOI_OP_INDEX</p>
+    <table style="border-collapse:collapse; width:70%; margin-left:3em; margin-top:-1em;">
+      <thead>
+        <tr><th style="width:40%; border-top:1px solid #000; border-left:1px solid #000; border-right:1px solid #000;" colspan="2">Byte[0]</th><th style="width:60%; border-right:none;">&nbsp;</tr>
+      </thead>
+      <tbody>
+        <tr style="text-align:center;"><td style="border-left:1px solid #000; border-right:1px solid #000;">7 &nbsp; &nbsp; 6</td><td style="border-right:1px solid #000;">5 &nbsp; &nbsp; 4 &nbsp; &nbsp; 3 &nbsp; &nbsp; 2 &nbsp; &nbsp; 1 &nbsp; &nbsp; 0</td><td>&nbsp;</td></tr>
+        <tr style="text-align:center;"><td style="border:1px solid #000; background-color: #EEEED6;">0 &nbsp; &nbsp; 0</td><td style="border:1px solid #000; background-color: #EEEED6;">index</td><td>&nbsp;</td></tr>
+      </tbody>
+    </table>
+
+    <p style="margin-left:3em; margin-top:0.5em; padding-bottom:2em;">2-bit tag: b00<br>
+       6-bit index into the colour index array: 0..63<br>
+    A valid encoder must not issue 2 or more consecutive QOI_OP_INDEX chunks to the same index. QOI_OP_RUN should be used instead.</p>
+
+
+    <p style="font-weight:bold;">QOI_OP_DIFF</p>
+    <table style="border-collapse:collapse; width:70%; margin-left:3em; margin-top:-1em;">
+      <thead>
+        <tr><th style="width:40%; border-top:1px solid #000; border-left:1px solid #000; border-right:1px solid #000;" colspan="4">Byte[0]</th><th style="width:60%; border-right:none;">&nbsp;</tr>
+      </thead>
+      <tbody>
+        <tr style="text-align:center;"><td style="border-left:1px solid #000; border-right:1px solid #000;">7 &nbsp; &nbsp; 6</td><td style="border-right:1px solid #000;">5 &nbsp; &nbsp; 4</td><td style="border-right:1px solid #000;">3 &nbsp; &nbsp; 2</td><td style="border-right:1px solid #000;">1 &nbsp; &nbsp; 0</td><td>&nbsp;</td></tr>
+        <tr style="text-align:center;"><td style="border:1px solid #000; background-color: #EEEED6;">0 &nbsp; &nbsp; 1</td><td style="border:1px solid #000; background-color: #EEEED6;">dr</td><td style="border:1px solid #000; background-color: #EEEED6;">dg</td><td style="border:1px solid #000; background-color: #EEEED6;">db</td><td>&nbsp;</td></tr>
+      </tbody>
+    </table>
+
+    <p style="margin-left:3em; margin-top:0.5em; padding-bottom:2em;">2-bit tag: b01<br>
+       2-bit red channel difference from the previous pixel -2..1<br>
+       2-bit green channel difference from the previous pixel -2..1<br>
+       2-bit blue channel difference from the previous pixel -2..1<br>
+    The difference to the current channel values are using a wraparound operation, so 1 - 2 will result in 255, while 255 + 1 will result in 0.<br>
+    Values are stored as unsigned integers with a bias of +2. Eg -2 is stored as 0 (b00), 1 is stored as 3 (b11).<br>
+    The alpha value remains unchanged from the previous pixel.</p>
+
+
+    <p style="font-weight:bold;">QOI_OP_LUMA</p>
+    <table style="border-collapse:collapse; width:70%; margin-left:3em; margin-top:-1em;">
+      <thead>
+        <tr><th style="width:40%; border-top:1px solid #000; border-left:1px solid #000; border-right:1px solid #000;" colspan="2">Byte[0]</th><th style="width:40%; border-top:1px solid #000; border-right:1px solid #000;" colspan="2">Byte[1]</th><th style="width:20%; border-right:none;">&nbsp;</tr>
+      </thead>
+      <tbody>
+        <tr style="text-align:center;"><td style="border-left:1px solid #000; border-right:1px solid #000;">7 &nbsp; &nbsp; 6</td><td style="border-right:1px solid #000;">5 &nbsp; &nbsp; 4 &nbsp; &nbsp; 3 &nbsp; &nbsp; 2 &nbsp; &nbsp; 1 &nbsp; &nbsp; 0</td>
+        <td style="border-left:1px solid #000; border-right:1px solid #000;">7 &nbsp; &nbsp; 6 &nbsp; &nbsp; 5 &nbsp; &nbsp; 4</td><td style="border-right:1px solid #000;">3 &nbsp; &nbsp; 2 &nbsp; &nbsp; 1 &nbsp; &nbsp; 0</td>
+        <td>&nbsp;</td></tr>
+        <tr style="text-align:center;"><td style="border:1px solid #000; background-color: #EEEED6;">1 &nbsp; &nbsp; 0</td><td style="border:1px solid #000; background-color: #EEEED6;">diff &nbsp; green</td><td style="border:1px solid #000; background-color: #EEEED6;">dr &nbsp; - &nbsp; dg</td><td style="border:1px solid #000; background-color: #EEEED6;">db &nbsp; - &nbsp; dg</td><td>&nbsp;</td></tr>
+      </tbody>
+    </table>
+
+    <p style="margin-left:3em; margin-top:0.5em; padding-bottom:2em;">2-bit tag: b10<br>
+       6-bit green channel difference from the previous pixel -32..31<br>
+       4-bit   red channel difference minus green channel difference -8..7<br>
+       4-bit  blue channel difference minus green channel difference -8..7<br>
+    The green channel is used to indicate the general direction of change and is encoded in 6 bits. The red and blue channels (<code>dr</code> and <code>db</code>) base their diffs off of the green channel difference, ie:<ul style="margin-left:3em; margin-top:-3em;"><code>
+    dr_dg = (cur_px.r - prev_px.r) - (cur_px.g - prev_px.g)<br>
+    db_dg = (cur_px.b - prev_px.b) - (cur_px.g - prev_px.g)</code></ul></p>
+
+    <p style="margin-left:3em; margin-top:0.5em; padding-bottom:2em;">The difference to the current channel values are using a wraparound operation, so 10 - 13 will result in 253, while 250 + 7 will result in 1.<br>
+    Values are stored as unsigned integers with a bias of +32 for the green channel and a bias of +8 for the red and blue channels.<br>
+    The alpha value remains unchanged from the previous pixel.</p>
+
+
+    <p style="font-weight:bold;">QOI_OP_RUN</p>
+    <table style="border-collapse:collapse; width:70%; margin-left:3em; margin-top:-1em;">
+      <thead>
+        <tr><th style="width:40%; border-top:1px solid #000; border-left:1px solid #000; border-right:1px solid #000;" colspan="2">Byte[0]</th><th style="width:60%; border-right:none;">&nbsp;</tr>
+      </thead>
+      <tbody>
+        <tr style="text-align:center;"><td style="border-left:1px solid #000; border-right:1px solid #000;">7 &nbsp; &nbsp; 6</td><td style="border-right:1px solid #000;">5 &nbsp; &nbsp; 4 &nbsp; &nbsp; 3 &nbsp; &nbsp; 2 &nbsp; &nbsp; 1 &nbsp; &nbsp; 0</td><td>&nbsp;</td></tr>
+        <tr style="text-align:center;"><td style="border:1px solid #000; background-color: #EEEED6;">1 &nbsp; &nbsp; 1</td><td style="border:1px solid #000; background-color: #EEEED6;">run</td><td>&nbsp;</td></tr>
+      </tbody>
+    </table>
+
+    <p style="margin-left:3em; margin-top:0.5em; padding-bottom:2em;">2-bit tag: b11<br>
+       6-bit run-length repeating the previous pixel: 1..62<br>
+    The run-length is stored with a bias of -1. Note that the run-lengths 63 and 64 (b11111110 and b11111111) are illegal as they are occupied by the QOI_OP_RGB and QOI_OP_RGBA tags.</p>
+
+
+    <h2>Acknowledgements<br></h2><hr style="width:70%; text-align:left; margin-left:0;">
+
+    <p>The hardest part of this project was working out how to process the variety of Sprite types, especially types 0 to 4, whereas the actual conversion into the QOI format was very easy and straightforward.</p>
+
+    <p>Thanks are due to <a href="https://www.geraldholdsworth.co.uk/" title="External site: www.geraldholdsworth.co.uk">Gerald Holdsworth</a> for his info on Sprites and Lazarus source code, as well as the <a href="https://source.netsurf-browser.org/libroSprite.git/" title="External site: source.netsurf-browser.org/libroSprite.git">Lib RO Sprite</a> source code, which have both been a great source of help in developing this application.</p>
+
+    <p>The conversion routines are written in Assembler for speed with BASIC being used to load and validate files and provide the Wimp facilities, etc.<p>
+
+    <br>
+
+    <h2>Support<br></h2><hr style="width:70%; text-align:left; margin-left:0;">
+
+    <p>For support queries or any other help with this software, please contact: <a href="mailto:coleman@orpheusmail.co.uk" title="Contact the developer">coleman@orpheusmail.co.uk</a>.</p>
+
+    <br>
+
+    <div style="visibility:hidden; height:1px;"><a name="license" title="Software License"> <a></div>
+    <div id="license"><h2>License<br></h2><hr style="width:70%; text-align:left; margin-left:0;">
+
+    <p>Copyright &copy; 2022 Richard Coleman.</p>
+    <p>Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the &ldquo;Software&rdquo;), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:</p>
+    <p>The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.</p>
+    <p>THE SOFTWARE IS PROVIDED &ldquo;AS IS&rdquo;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.</p>
+
+  </body>
+</html>

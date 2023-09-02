@@ -1,0 +1,85 @@
+; QOI to Sprite converter
+;   and
+; OvationPro TransLoader for converting QOI to Sprite (if 'TRANSLOADER' is defined)
+;==================================================================================================
+
+; Other files are loaded at the end of this file
+
+;    OPT     1+8192                        ; Turn on normal listing + Turn off listing conditional directives
+
+; Define the type of file we're producing ...
+                                           ; These don't need a value, just need them to be defined
+                                          ;GBLL    PHOTODESK
+                                          GBLL    APP
+                                          ;GBLL    RO4_MODULE
+
+
+    GET     s.Hdr                         ; SWI numbers, Macros, and QOI constants
+
+
+    ; Workspace is claimed from the Heap and initialised in !RunImage
+
+
+;==================================================================================================
+
+    AREA    |!!App$$Code|, CODE, READONLY
+
+
+    ENTRY
+
+
+; On Entry:
+;  R3 = Width
+;  R4 = Image size
+;  R5 = 0 = Convert QOI -> Sprite, <> 0 = Convert Sprite -> QOI (Unused by TransLoader)
+;  R6 = Height
+;  R7 = Pointer to workspace
+
+
+    DCD     workspace                     ; Store offset to Workspace here so !Qoi2Spr can find it!
+
+
+    STMFD   R13!,{R8-R12,R14}             ; Preserve entry registers
+
+    ; Move Workspace address into R12
+    MOV     R12,R7
+
+
+    ; Show hourglass
+    MOV     R0,#50                        ; Delay displaying hourglass for half a second
+    SWI     XHourglass_Start
+
+    ; Enable Escape conditions
+    MOV     R0,#229
+    MOV     R1,#0
+    MOV     R2,#255
+    SWI     OS_Byte
+    STR     R1,[R12,#esc_state]           ; Store Escape current state (0=Enabled, <>0=Disabled)
+
+  IF :DEF:TRANSLOADER
+    B       do_Qoi2Spr                    ; TransLoader only does QOI to Sprite
+  ELSE
+    MOV     R0,R6
+    CMP     R5,#0
+    BEQ     do_Qoi2Spr
+    B       do_Spr2Qoi
+  ENDIF
+
+
+;============================== Conversion routines =============================;
+
+    GET     s.Hourglass_Index             ; Initialise hourglass percentage values and fills Index array with zeroes and inserts
+                                          ; starting pixel value
+    GET     s.(App).App_Qoi2Spr           ; Converts QOI file to a Sprite
+    GET     s.WriteMask                   ; Stores the Mask/Alpha byte
+    GET     s.qoi2spr                     ; Converts QOI chunk to RGBA value
+
+  IF :LNOT::DEF:TRANSLOADER               ; TransLoader only converts QOI to Sprite
+    GET     s.(App).App_Spr2Qoi           ; Converts a Sprite file to a QOI
+    GET     s.ProcessSpr                  ; Process Sprite pixels into QOI chunks
+    GET     s.spr2qoi                     ; Converts RGBA value to a QOI chunk. Includes writeFooter
+  ENDIF
+
+
+    END
+

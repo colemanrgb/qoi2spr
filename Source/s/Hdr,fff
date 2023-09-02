@@ -1,0 +1,362 @@
+; Convert QOI
+; Set up SWIs, Macros, and other constants
+;==================================================================================================
+
+
+; To allow CMYK Sprites to be saved as QOI files:
+;   1. Enable HANDLE_CMYK and recompile
+;   2. Rename Sprites in format directory ("!Sprites22" and "5Sprites22") from "!3qoi" to "!4qoi"
+;   3. Rename format directory from "!3QOI" to "!4QOI"
+; Not enabled by default as I think "!4" handlers are expected to preserve CMYK data which this doesn't - converts to RGB
+
+;                                          GBLL    HANDLE_CMYK
+
+; Version
+    GET     s.VersionASM                  ; PROG_VERS, PROG_DATE, PROG_AUTHOR
+
+
+; AddSWI:         Defines SWI names - X and non-X forms
+    MACRO
+    AddSWI  $SWIname, $value
+$SWIname    EQU    $value                 ; SWI
+X$SWIname   EQU    $value + (1:SHL:17)    ; X SWI
+    MEND
+
+
+    AddSWI  OS_Args                               , &09
+    AddSWI  OS_BGet                               , &0A
+    AddSWI  OS_BPut                               , &0B
+    AddSWI  OS_Byte                               , &06
+    AddSWI  OS_File                               , &08
+    AddSWI  OS_Find                               , &0D
+    AddSWI  OS_GBPB                               , &0C
+    AddSWI  OS_Module                             , &1E
+    AddSWI  OS_ReadEscapeState                    , &2C
+    AddSWI  OS_ReadModeVariable                   , &35
+    AddSWI  OS_ReadMonotonicTime                  , &42
+    AddSWI  OS_ReadSysInfo                        , &58
+    AddSWI  OS_ValidateAddress                    , &3A
+    AddSWI  OS_Word                               , &07
+
+    AddSWI  ColourTrans_ReadPalette               , &4075C
+
+    AddSWI  Hourglass_On                          , &406C0
+    AddSWI  Hourglass_Off                         , &406C1
+    AddSWI  Hourglass_Smash                       , &406C2
+    AddSWI  Hourglass_Start                       , &406C3
+    AddSWI  Hourglass_Percentage                  , &406C4
+
+    AddSWI  MessageTrans_ErrorLookup              , &41506
+
+    AddSWI  Photodesk_Allocate                    , &49210
+    AddSWI  Photodesk_Thumbnail                   , &49218
+    AddSWI  Photodesk_VM                          , &49203
+    AddSWI  Photodesk_VMOp                        , &4920B
+
+    AddSWI  Wimp_DeleteIcon                       , &400C4
+    AddSWI  Wimp_GetWindowInfo                    , &400CC
+    AddSWI  Wimp_ReadPalette                      , &400E5
+
+
+; FunctionSig:    Embeds function name into code to aid debugging
+    MACRO
+$fnsig      FunctionSig    $param         ; Embed function name fnsig. $param might be "ROUT"
+
+    DCB     "$fnsig",0
+    ALIGN
+    DCD     &FF000000+(:LEN:"$fnsig"+4):AND::NOT:3                  ; "Magic" value
+$fnsig      $param
+    MEND
+
+
+QOI_INDEX_SIZE                            EQU 64*4    ; Size of Index (in bytes) of previously seen pixels
+
+QOI_HEADER_SIZE                           EQU 14
+QOI_FOOTER_SIZE                           EQU 8
+
+; QOI constants
+QOI_OP_INDEX                              EQU &00     ; 00xxxxxx
+QOI_OP_DIFF                               EQU &40     ; 01xxxxxx
+QOI_OP_LUMA                               EQU &80     ; 10xxxxxx
+QOI_OP_RUN                                EQU &C0     ; 11xxxxxx
+QOI_OP_RGB                                EQU &FE     ; 11111110
+QOI_OP_RGBA                               EQU &FF     ; 11111111
+
+QOI_MASK_2                                EQU &C0     ; 11000000
+
+QOI_SRGB                                  EQU 0       ; sRGB, i.e. gamma scaled RGB channels and a linear alpha channel
+QOI_LINEAR                                EQU 1       ; All channels are linear
+
+
+pixel_start_value                         EQU     &FF000000         ; Starting pixel value
+pixel_start_index                         EQU     &35               ; Pre-calculated Index value for Starting pixel value above
+                                                                    ;   in case QOI starts with a Run chunk
+
+  IF :DEF:PHOTODESK
+
+; Locations in in_block we use:
+wimp_pollBlock                            EQU     8
+VM_Flags                                  EQU     140
+def_dpi                                   EQU     180               ; Default DPI (X and Y are the same)
+scratch                                   EQU     268               ; Address of 64K Scratch buffer
+save_word                                 EQU     304               ; save word: (bits set during save operations)
+in_ccb_anchor                             EQU     364               ; Anchor for Channel Control Blocks
+off_base                                  EQU     388               ; base offset
+PD_SprType                                EQU     656               ; PhotoDesk Sprite type (1, 3, or 4 = 8bpp, 24bpp, or CMYK)
+
+; Locations in Sprite Control Block we use:
+scb_width                                 EQU     16                ; Sprite width-1
+scb_height                                EQU     20                ; Sprite height-1
+scb_date_low                              EQU     116               ; Low bytes of file date
+scb_date_high                             EQU     120               ; High byte of file date
+scb_filesize                              EQU     124
+scb_dpi                                   EQU     164               ; DPI of Sprite in &yyyyXXXX format
+scb_bpp                                   EQU     640
+scb_channels                              EQU     644               ; Total number of channels for this image
+scb_offsetCCB_1                           EQU     648               ; Offset to first CCB of this image
+scb_palette                               EQU     1024              ; Start of palette data
+
+; Locations in Channel Control Block we use:
+ccb_nextchannel                           EQU     4                 ; Offset to next channel (from start of this block (+0))
+ccb_Flags                                 EQU     72                ; Channel flags
+
+; Various values:
+  IF :DEF:HANDLE_CMYK
+save_type                                 EQU     4                 ; Can save PhotoDesk Sprite Types 1, 3 and 4
+  ELSE
+save_type                                 EQU     3                 ; Can save PhotoDesk Sprite Types 1 and 3
+  ENDIF
+scratchSize                               EQU     64*1024           ; Size of Scratch buffer: 64Kb
+f_type                                    EQU     &A61              ; QOI filetype
+
+  ENDIF
+
+
+  IF :DEF:RO4_MODULE
+
+    ; Module SWI calls
+    AddSWI  OS_ServiceCall                        , &30
+    AddSWI  ImageFileConvert_Convert              , &56840
+    AddSWI  ImageFileConvert_ConverterInfo        , &56842
+    AddSWI  ImageFileConvert_MiscOp               , &56841
+    AddSWI  ImageFileConvert_Register             , &56843
+    AddSWI  ImageFileConvert_Deregister           , &56844
+    AddSWI  ImageFileConvert_EnumerateConverters  , &56845
+
+; Services used by our module
+Service_TaskManagerAcknowledgements       EQU     &42680
+Service_ImageFileConvert_Started          EQU     &80D60
+Service_ImageFileConvert_Dying            EQU     &80D61
+;Service_ImageFileConvert_ConverterChanged EQU     &80D62
+
+; Misc Operations common to the output type 'Sprite' - NOT USED
+;Converter_MiscOp_Sprite_ReadInfo                     EQU &400    ; Read information
+; Flags for Converter_MiscOp_Sprite_ReadInfo - NOT USED
+;Converter_MiscOp_Sprite_ReadInfo_Palette             EQU      1 << 0     ; Image has a palette (if <8bpp)
+;Converter_MiscOp_Sprite_ReadInfo_Colour              EQU      1 << 1     ; Image is colour (otherwise image is greyscale)
+;Converter_MiscOp_Sprite_ReadInfo_Mask                EQU      1 << 2     ; Image has alpha channel or mask
+;Converter_MiscOp_Sprite_ReadInfo_Interlace_Mask      EQU      7 << 2     ; Interlace type (bits 3-5) -
+;Converter_MiscOp_Sprite_ReadInfo_Interlace_None      EQU      0 << 2     ;   0 = No interlacing
+;Converter_MiscOp_Sprite_ReadInfo_Interlace_Adam7     EQU      1 << 2     ;   1 = Adam7 interlacing
+;Converter_MiscOp_Sprite_ReadInfo_Interlace_Vertical  EQU      2 << 2     ;   2 = Vertical interlacing
+
+; Flags common to output type 'Sprite' - NOT USED
+;Converter_Convert_Sprite_CreateSprite     EQU 1 << 0  ; Set = Create a sprite, unset = Create a sprite file
+
+; Error codes to return in R0 to ImageFileConverter to flag an error from Convert and MiscOp -
+err_ConverterOutputBufferTooSmall         EQU     1     ; "Not enough space in output buffer for conversion"
+err_ConverterBadFlags                     EQU     2     ; "Bad flags set for conversion through ImageFileConvert"
+err_ConverterUnknownMiscOp                EQU     3     ; "Unknown MiscOp operation for ImageFileConvert"
+err_ConverterOutOfMemory                  EQU     4     ; "Not enough memory during ImageFileConvert conversion "
+err_ConverterCorruptData                  EQU     5     ; "ImageFile data is corrupt during ImageFileConvert conversion"
+
+sprFHdrSize                               EQU     16
+
+  ENDIF
+
+
+; Define workspace entries
+;==================================================================================================
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;   ANY  CHANGES  HERE  MUST  BE  REFLECTED  IN  !Qoi2Spr.!RunImage.PROCqoi_init
+
+                                          MAP     0
+pixel_start                               #       4    ; Pixel starting value (Initialised to &FF000000)
+; Next 4 fields must be together in this order ...
+QOI_Magic                                 #       4    ; QOI file: Magic identifier: "qoif"
+QOI_Width                                 #       4    ; QOI file: Sprite width in Big Endian
+QOI_Height                                #       4    ; QOI file: Sprite height in Big Endian
+QOI_ChanColspc                            #       4    ; QOI file: Channels + Colour Space bytes + 2 unused bytes
+
+ZERO_WS_START                             #       0
+; Start of Workspace we need zeroed ...
+
+hg_onepcent                               #       4    ; Hourglass: Number of rows that represents 1%
+hg_onepcentcount                          #       4    ; Hourglass: The current 1% row count (Decreasing)
+hg_pcent                                  #       4    ; Hourglass: Percent value to show (0..99)
+esc_state                                 #       4    ; Current state of Escape conditions (0=Enabled, <>0=Disabled)
+qoi_fhandle                               #       4    ; QOI file handle (0 = Whole file in memory)
+; Next 6 fields must be together in this order ...
+qoi_RunCount                              #       4    ; Keeps track of QOI Run count (Initialised to 0)
+qoi_fptr                                  #       4    ; Keeps track of where we are in the QOI file
+qoi_DataSize                              #       0    ; Used by Spr->QOI only. Occupies same location as qoi_DataEnd
+qoi_DataEnd                               #       4    ; Used by QOI->Spr only
+qoi_BufAddr                               #       4    ; Address of QOI buffer for memory calculations at end
+qoi_BufSize                               #       4    ; Size of QOI file for memory calculations at end
+; Used for caching file if qoi_fhandle <> 0 ...
+cache_size                                #       4    ; Size of cache buffers (All same size)
+qoi_CacheAddr                             #       4    ; Address of QOI cache buffer
+qoi_CachePtr                              #       4    ; Where we are in the QOI cache buffer
+qoi_CacheFree                             #       4    ; How much free space left in QOI cache buffer
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+  IF :DEF:PHOTODESK
+
+PROG_NAME                                 SETS    "QOI format handler"
+
+; Workspace is initialised in s.!Handler
+inblock                                   #       4    ; Address of in_block
+rma_buffer                                #       4    ; Zero means using Scratch buffer else Address of memory claimed in RMA
+  ENDIF
+
+
+  IF :DEF:RO4_MODULE
+; RISC OS 4 Module entries ...
+
+PROG_NAME                                 SETS    "ConvertQOI"
+
+; Workspace is claimed from RMA and initialised in s.ConvertQOI.Module_Init
+IFC_Registered                            #       4    ; <> 0 if we're registered with ImageFileConverter
+IFC_RISCOS                                #       4    ; RISC OS version
+IFC_R0                                    #       4    ; Copy of R0 on entry
+rma_buffer                                #       4    ; Address of memory claimed in RMA
+width                                     #       4    ; Sprite width in pixels. Only used by save
+spr_fhandle                               #       4    ; Sprite file handle (0 = Whole file in memory)
+spr_DataAddr                              #       4    ; Address of Sprite Image data (spriteDataBlock%!0)
+spr_LeftBits                              #       4
+spr_RightBits                             #       4
+spr_Flags                                 #       4
+spr_Name                                  #       4    ; Holds pointer to Sprite name
+; Next 5 fields must be together in this order ...
+mask_DataBlock                            #       0    ; Start of mask data block in Workspace. Occupies same location as mask_x
+mask_x                                    #       4    ; mask_x (maskDataBlock%!0)
+mask_CurrentWord                          #       4    ; (maskDataBlock%!4)
+mask_DataAddr                             #       4    ; Address of Sprite Mask data (maskDataBlock%!8)
+mask_Flags                                #       4    ; mask/alpha/chan/clear (maskDataBlock%!12)
+mask_RemoveIt                             #       4    ; = 0 (Don't remove mask) or -1 (Remove mask if all mask bits/bytes solid)
+mask_LoopData                             #     4*4    ; Space for 4 registers
+pal_size                                  #       4    ; Size of palette in bytes (8 bytes per entry)
+pal_buffer                                #   256*4    ; Allocate space for palette (4 bytes per entry)
+  ENDIF
+
+
+
+  IF :DEF:APP                             ; Also defined for TransLoader
+; Application entries ...
+
+  IF :DEF:TRANSLOADER
+PROG_NAME                                 SETS    "QOI TransLoader"
+  ELSE
+PROG_NAME                                 SETS    "Qoi2Spr"
+  ENDIF
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;   ANY  CHANGES  HERE  MUST  BE  REFLECTED  IN  !Qoi2Spr.!RunImage.PROCqoi_init
+
+; Workspace is claimed from Heap and initialised in !Qoi2Spr.!RunImage.PROCqoi_init
+err_state                                 #       4    ; Returns Error state to !RunImage
+spr_fhandle                               #       4    ; Sprite file handle
+spr_DataAddr                              #       4    ; Address of sprite data (spriteDataBlock%!0)
+spr_fptr                                  #       4    ; Where we are in the Sprite image on disc
+spr_CacheAddr                             #       4    ; Address of Sprite cache (Does not change)
+spr_CacheFree                             #       4    ; Amount of space left in Sprite cache (Decreases)
+spr_CacheLines                            #       4    ; Amount of Sprite cache to save to disc
+  IF :LNOT::DEF:TRANSLOADER
+spr_CachePtr                              #       4
+spr_LeftBits                              #       4
+spr_RightBits                             #       4
+spr_Flags                                 #       4
+spr_widthWords                            #       4
+width                                     #       4    ; Sprite width in pixels. Only used by save
+  ENDIF
+; Next 5 fields must be together in this order ...
+mask_DataBlock                            #       0    ; Start of mask data block in Workspace. Occupies same location as mask_x
+mask_x                                    #       4    ; mask_x (maskDataBlock%!0)
+mask_CurrentWord                          #       4    ; (maskDataBlock%!4)
+mask_DataAddr                             #       4    ; Address of mask data (maskDataBlock%!8)
+mask_Flags                                #       4    ; mask/alpha/chan/clear (maskDataBlock%!12)
+mask_RemoveIt                             #       4    ; = 0 or -1. Decide if mask is used or not (maskDataBlock%!24)
+mask_fptr                                 #       4    ; Where we are in the Sprite image on disc
+mask_CacheAddr                            #       4    ; Address of Sprite cache (Does not change)
+mask_CacheLines                           #       4    ; Amount of Sprite cache to save to disc
+  IF :LNOT::DEF:TRANSLOADER
+mask_CachePtr                             #       4
+mask_LineLen                              #       4
+mask_LoopData                             #     4*4    ; Space for 4 registers
+pal_size                                  #       4    ; Size of palette in bytes (8 bytes per entry)
+pal_buffer                                #   256*4    ; Allocate space for palette (4 bytes per entry)
+  ENDIF
+  ENDIF
+
+
+; ... End of Workspace we need zeroed
+ZERO_WS_END                               #       0
+ZERO_WS_SIZE                              EQU     ZERO_WS_END - ZERO_WS_START       ; Size of workspace that needs zeroing
+
+QOI_INDEX                                 #       QOI_INDEX_SIZE                    ; Address of Index array
+
+; ... End workspace
+WSPACE_SIZE                               EQU     @
+
+
+    !       0, ""
+    !       0, "Creating $PROG_NAME $PROG_VERS ($PROG_DATE) ..."
+    !       0, ""
+    !       0, "Workspace size (WSPACE_SIZE) = &" :CC::STR: (WSPACE_SIZE)
+    !       0, ""
+
+
+; Now create the actual workspace in the file and initialise it ...
+
+
+    AREA    |Workspace$$Data|, DATA, READWRITE ;, PIC
+
+
+  ; Add version info into programme
+  IF :LNOT::DEF:RO4_MODULE          ; RISC OS 4 Module already includes version info
+    DCB     0,"$PROG_NAME $PROG_VERS ($PROG_DATE) © $PROG_AUTHOR"
+    ALIGN
+  ENDIF
+
+
+workspace
+
+  IF :DEF:RO4_MODULE                      ; For RISC OS 4 Module just need the Magic identifier
+
+    DCB     "qoif"                        ; QOI file: Magic identifier
+
+  ELSE                                    ; !Qoi2Spr App and PhotoDesk Format Handler
+
+    DCD     pixel_start_value             ; Pixel starting value
+
+    ; QOI header (4 words) ...
+    DCB     "qoif"
+    DCD     0, 0, 0
+
+    ; Workspace to be zeroed ...
+    SPACE   ZERO_WS_SIZE                  ; Fill workspace with zeroes to match references above
+
+    ; Zero-initialise scratch space + Index array ...
+    SPACE   QOI_INDEX_SIZE
+
+  ENDIF
+
+
+    ALIGN
+
+    END
+

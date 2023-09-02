@@ -1,0 +1,1205 @@
+; Save Sprite as a QOI file
+;==================================================================================================
+
+; Uses routine IFC_Convert_Error from s.(Module).IFC_Qoi2Spr
+
+
+IFC_Convert_Spr2Qoi    FunctionSig              ; Conversion routine Sprite -> QOI
+
+; On Entry:
+;   R0  = Flags:
+;               Bit 16:  0 = Convert first Sprite to a QOI, R7 is ignored
+;                        1 = Convert the Sprite specified in R7 (either number or name)
+;               Bits 17-23 = 0 (Unused)
+;               All other bits reserved (see SWI documentation for details)
+;   R1  = Filetype pair (&0FF90A61)
+;   R2  = Pointer to Sprite data (Includes Sprite Area Header without the first word: Total Size of Area)
+;   R3  = Length of Sprite data
+;   R4  = Pointer to buffer to store QOI image, or 0 to read size required
+;   R5  = Size of buffer in R4, or 0 to read size required
+;   R6  = Background colour to use, or -1 for default (not used)
+;   R7  = If R7 <= &8000 then R7 is taken to be a Sprite number to convert (first Sprite = 1):
+;            If R7 = 0 then R7 will default to the first Sprite.
+;            If R7 > Number of Sprites then returns error "Sprite not found".
+;         If R7 > &8000 then R7 is taken to be a pointer to the Sprite name terminated by a space or ctrl character:
+;            If R7 is not a valid address then returns error "Sprite not found"
+;            If the Sprite name is not found then returns error "Sprite not found"
+;   R12 = Pointer to workspace
+
+; On Exit (V clear):
+;   R5  = If R4 = 0 or R5 = 0 on entry then R5 = size of output image buffer required
+;         otherwise R5 = size of output image buffer used
+;   R7  = Pointer to name of Sprite (0 terminated)
+;   Other registers preserved
+
+; On Exit (V set):
+;   R0  = Error code:
+;           1 = err_ConverterOutputBufferTooSmall ("Not enough space in output buffer")
+;           5 = err_ConverterCorruptData ("ImageFile data is corrupt")
+;         255 = "Sprite not found"
+;         254 = "Invalid Sprite Mode"
+;         253 = "Sprite type is not supported"
+;   Other registers preserved
+
+; Only get here if filetypes in R1 match mine and are correct for this routine.
+
+; Background value in R6 is not used, so can be set to whatever value you wish, though -1 makes a sensible default
+
+; To avoid calling this twice can simply allocate enough memory for worst case scenario:
+;       buffer_size = (sprite width * sprite height * (channels+1)) + 22 (QOI_HEADER_SIZE+QOI_FOOTER_SIZE)
+;                     (Use channels = 3 unless sprite has a mask or alpha channel, or sprite type is 7 (CMYK)
+;                      then use channels = 4)
+
+
+    STMFD   R13!,{R1-R11,R14}             ; Preserve entry registers
+
+    ; Show hourglass
+    MOV     R11,R0                        ; Preserve R0
+    MOV     R0,#50                        ; Delay displaying hourglass for half a second
+    SWI     XHourglass_Start
+    MOV     R0,R11                        ; Restore R0
+
+;    ; Enable Escape conditions
+;    STMFD   R13!,{R0-R2}
+;    MOV     R0,#229
+;    MOV     R1,#0
+;    MOV     R2,#255
+;    SWI     OS_Byte
+;    STR     R1,[R12,#esc_state]           ; Store Escape current state (0=Enabled, <>0=Disabled)
+;    LDMFD   R13!,{R0-R2}
+
+
+    ; Store flags in R0 so can restore them on exit
+    STR     R0,[R12,#IFC_R0]
+
+    ; If output buffer (R4) = 0 then ensure R5 (size of output buffer) = 0
+    CMP     R4,#0
+    MOVEQ   R5,#0                         ; Use a +ve buffer size to decide whether to write to output buffer or not
+
+
+    ; Store initial values in Workspace
+    MOV     R10,#0
+    STR     R10,[R12,#qoi_fhandle]        ; No file handle as QOI file is in memory
+    STR     R10,[R12,#spr_fhandle]        ; No file handle as Sprite file is in memory
+    STR     R10,[R12,#qoi_RunCount]       ; run% = 0
+
+    ; Ensure these are zeroed ...
+    STR     R10,[R12,#pal_size]           ; Number of Palette entries
+    STR     R10,[R12,#mask_DataAddr]      ; 0 = No Mask
+
+    STR     R4,[R12,#qoi_fptr]
+    STR     R5,[R12,#qoi_DataSize]
+    ; Need starting values for memory size calculations at the end
+    STR     R4,[R12,#qoi_BufAddr]
+    STR     R5,[R12,#qoi_BufSize]
+
+    MOV     R11,R0,LSR#16                 ; R11 = Flag bits 16-23 shifted down to bits 0-7
+    AND     R11,R11,#1                    ; Just want bit 16 (now bit 0)
+
+    ADD     R3,R2,R3                      ; R3 = Addr at which Sprite Data ends
+
+    ; Sprite address in R2 is out by 4 as first word of Sprite Area is not included
+    ; so put R2 back by 4 so we don't have to subtract 4 every time we calculate an offset!
+    SUB     R2,R2,#4
+
+
+; Registers available: R0,R1,R4,R6,R8,R9,R10,R14
+; R2 = input buffer-4, R3 = input buffer size, R4 = output buffer, R5 = output buffer size, R7 = sprite number,
+; R11 = Flags shifted to 0-7
+
+; Sprite buffer (R2) does not include first word of Sprite Area so can't use OS_SpriteOps
+
+
+; If bit 0 clear then set R7 = 1
+; If bit 0 set then check value in R7
+;        If R7 = 0 then R7 = 1
+;        If R7 > number of Sprites then error "Sprite not found"
+;        If R7 > &8000 then R7 = ptr to name of Sprite (&8000 allows for 32,768 Sprites in a file!)
+;                      If R7 is not a valid address then error "Sprite not found"
+
+    LDR     R8,[R2,#4]                    ; Number of Sprites in file
+    CMP     R11,#0                        ; R11 = 0 or 1 (1 = Use Sprite number/name in R7)
+    MOVEQ   R7,#1                         ; If bit 0 clear then set R7 = 1
+    BEQ     %FT01
+    ; Bit 0 is set, so R7 = number or name of Sprite to convert
+    ; So check it is within 1..Number of Sprites
+    ; Don't do signed check to catch -ve numbers as address may be -ve!
+    CMP     R7,#0
+    MOVEQ   R7,#1                         ; R7 < 1 (ie = 0) then R7 = 1
+    CMP     R7,#&8000                     ; Does R7 point to a Sprite name?
+    BHI     getAddressFromName
+
+    ; and check it is within 1..Number of Sprites
+    CMP     R7,R8
+    ADRGT   R0,err_sprite_not_found
+    BGT     IFC_Convert_Error
+01
+    LDR     R1,[R2,#8]                    ; Get offset to first Sprite
+    ADD     R2,R2,R1                      ; Address of Sprite in R2
+
+    ; Loop round to get to the Sprite we want ...
+02
+
+    ; Check we are within the Sprite file
+    ADD     R1,R2,#48                     ; 44 bytes for Sprite header + 1 word for Image Data
+    CMP     R1,R3
+    MOVHS   R0,#err_ConverterCorruptData  ; = 5
+    BHS     IFC_Convert_Error
+
+    SUBS    R7,R7,#1
+    LDRNE   R1,[R2,#0]                    ; Offset to next Sprite from this Sprite
+    ADDNE   R2,R2,R1
+    BNE     %BT02
+
+    ; Address of Sprite is in R2, so R7 now available
+    B       %FT05
+
+
+err_sprite_not_found
+   DCD      255
+   DCB      "Sprite not found",0
+   ALIGN
+
+
+err_sprite_mode_invalid
+   DCD      254
+   DCB      "Invalid Sprite Mode",0
+   ALIGN
+
+
+err_sprite_unsupported
+   DCD      253
+   DCB      "Sprite type is not supported",0
+   ALIGN
+
+
+;err_escSave
+;    DCD     69
+;    DCB     "Save aborted!",0
+;    ALIGN
+
+
+getAddressFromName    FunctionSig
+
+; Registers available: R0,R1,R4,R6,R9,R10,R14
+
+    ; R7 = pointer to name (space or ctrl character terminated)
+    MOV     R0,R7
+    ADD     R1,R7,#13
+    SWI     OS_ValidateAddress            ; Check that memory block passed to us in R7 is valid (C flag is clear)
+
+    ADRCS   R0,err_sprite_not_found
+    BCS     IFC_Convert_Error
+
+    ; R8 = Number of Sprites in file
+    ; Put address of Sprite in R2
+    MOV     R1,#12                        ; Max length of Sprite name
+    ; Use Palette Buffer to hold Sprite name
+    ADD     R9,R12,#pal_buffer
+    MOV     R10,#0                        ; Zero the Sprite name buffer
+    STR     R10,[R9,#0]
+    STR     R10,[R9,#4]
+    STR     R10,[R9,#8]
+
+    ; Copy characters from user supplied name, converting to lowercase
+01
+    LDRB    R10,[R7],#1
+    ; Lowercase characters A-Z in R10. Uses R14 just to set flag
+    CMP     R10,#"A"                      ; if R10 >= "A"
+    RSBHSS  R14,R10,#"Z"                  ; and "Z" >= R10
+    ADDHS   R10,R10,#32                   ; then make lowercase
+    CMP     R10,#127
+    MOVEQ   R10,#0                        ; Treat Backspace character as 0-terminator
+    CMP     R10,#32                       ; Have we reached terminator? (ctrl character)
+    MOVEQ   R10,#160                      ; replace space with non-breaking space
+    STRHSB  R10,[R9],#1                   ; No, so store character
+    SUBHSS  R1,R1,#1
+    BHS     %BT01
+
+    ; Get pointer to name we just stored
+    ADD     R9,R12,#pal_buffer
+    LDMIA   R9,{R0,R6,R7}                 ; Get name into registers R0,R6,R7
+
+
+    ; Loop round to get to the Sprite we want ...
+
+    LDR     R1,[R2,#8]                    ; Get offset to first Sprite
+    ADD     R2,R2,R1                      ; Address of Sprite in R2
+03
+    ; Check we are within the Sprite file
+    ADD     R1,R2,#48                     ; 44 bytes for Sprite header + 1 word for Image Data
+    CMP     R1,R3
+    MOVHS   R0,#err_ConverterCorruptData  ; = 5
+    BHS     IFC_Convert_Error
+
+    LDMIA   R2,{R1,R9,R10,R14}            ; Name starts at offset 4 (R1 = offset to next sprite from this Sprite)
+    CMP     R0,R9                         ; See if we have a match
+    CMPEQ   R6,R10
+    CMPEQ   R7,R14
+    ADDNE   R2,R2,R1
+    SUBNES  R8,R8,#1                      ; More Sprites to check?
+    BNE     %BT03
+
+    ; Address of Sprite is in R2, so R7, R8 now available
+    CMP     R8,#0                         ; If R8 = 0 then Sprite not found
+
+    ADREQ   R0,err_sprite_not_found
+    BEQ     IFC_Convert_Error
+
+05
+
+;----------------------------  Found  Sprite  -------------------------------------------;
+
+
+
+; R2 = Start of Sprite Header, R3 = Addr at which Sprite Data ends
+
+    MOV     R9,R2                         ; R9 = Start of Sprite Header in memory
+
+    ; Check that Offset to next Sprite is within the Sprite buffer
+    LDR     R7,[R2,#0]                    ; R7 = Offset to next Sprite from Sprite Header (End of this Sprite)
+    ADD     R6,R2,R7                      ; R6 = Addr at which this Sprite ends
+    CMP     R6,R3                         ; Addr of next Sprite should be <= buffer size, if > then error
+    MOVHI   R0,#err_ConverterCorruptData  ; = 5
+    BHI     IFC_Convert_Error
+
+    MOV     R3,R7
+
+    ; R2,R9 = Addr of Start of Sprite Header in memory
+    ; R3 = Offset to next Sprite from Sprite Header (End of this Sprite), so addr = R9 + R3
+
+
+    ; First bit used (lh bit)
+    LDR     R4,[R2,#24]
+    ; Last bit used (rh bit)
+    LDR     R5,[R2,#28]
+    STR     R4,[R12,#spr_LeftBits]
+    STR     R5,[R12,#spr_RightBits]
+
+    ; Width
+    LDR     R5,[R2,#16]                   ; width-1 (in words)
+    ADD     R5,R5,#1                      ; width+1
+    MOV     R5,R5,LSL#2                   ; R5 = width+1 * 4 (width in bytes)
+
+    ; Height
+    LDR     R0,[R2,#20]                   ; height-1
+    ADD     R0,R0,#1                      ; R0 = height+1
+    STR     R0,[R12,#QOI_Height]
+
+    ; Calculate Image size
+    MUL     R8,R5,R0                      ; width * height (in bytes)
+
+    ; Calculate hourglass values (Divide Sprite height (in R0) by 100)
+    ; also enables Escape key if not creating a RISC OS 4 Module
+    ; and zero the Index array and insert starting pixel value into Index array
+    BL      init_hourglass                ; [in s.Hourglass_Index]
+
+
+    ; If offsets are < 44 then set = 44
+    LDR     R10,[R2,#32]                  ; R10 = Offset to Sprite Image data from Sprite Header
+    LDR     R0,[R2,#36]                   ; R0  = Offset to Sprite Mask from Sprite Header
+    CMP     R10,#44
+    BHS     %FT01
+    ; No Image (Offset < 44) but if we have a Mask (Offset >= 44) then set Image = Mask (=No mask)
+    CMP     R0,#44
+    MOVHI   R10,R0                        ; Have a Mask so set Image = Mask
+    MOVLS   R10,#44                       ; Image offset < 44 and no valid Mask either then set = 44
+01
+    CMP     R0,#44
+    MOVLO   R0,R10                        ; Mask offset < 44 then set = Image offset (=No mask)
+    STRLO   R0,[R2,#36]                   ; We read from this when checking Mask size
+
+    ; Validate Image and Mask offsets are within the Sprite, and that Image and Mask are at least 4 bytes in size
+    SUB     R4,R3,#4                      ; Must be at least 1 Word (4 bytes) for Image + Mask
+
+    ; Offset to Sprite Image data should be <= (R3-4), if > then error
+    CMP     R10,R4
+    MOVHI   R0,#err_ConverterCorruptData  ; = 5
+    BHI     IFC_Convert_Error
+
+    ; Offset to Sprite Mask data should be <= (R3-4), if > then error
+    CMP     R0,R4                         ; If no Mask then R0 = R10, so end up checking twice!
+    MOVHI   R0,#err_ConverterCorruptData  ; = 5
+    BHI     IFC_Convert_Error
+
+    ; Check Image size is within the Sprite
+    ADD     R4,R10,R8                     ; R4 = End of Image = Offset to Sprite Image + Size of Image
+
+    ; If R4 > R3 then error
+    CMP     R4,R3
+    MOVHI   R0,#err_ConverterCorruptData  ; = 5
+    BHI     IFC_Convert_Error
+
+    ; R0 = Mask offset, R1 = UNUSED, R2 = Address of data, R3 = Offset to end of sprite, R6 = UNUSED, R9 = R2
+    ; R10 = Image offset, R11 = UNUSED
+
+
+    ; Store pointer to Sprite name in Workspace for use on exit
+    ADD     R1,R2,#4                      ; R2 + 4 = Start of Sprite name
+    STR     R1,[R12,#spr_Name]
+
+
+    MOV     R1,R0                         ; Store Mask offset
+    MOV     R11,R3                        ; Store End of Sprite offset
+
+    ; Get offset for Palette calculation - See which comes first Image or Mask?
+    CMP     R0,R10
+    ; Mask comes before Image
+    MOVLO   R4,R0                         ; R4 = Mask offset
+    ; Image comes before Mask, or no Mask
+    MOVHS   R4,R10                        ; R4 = Image offset
+    ; If have Mask ...
+    ADDNE   R6,R0,R9                      ; then set R6 = Addr at which Mask starts in buffer
+    STRNE   R6,[R12,#mask_DataAddr]       ; Start of Mask in buffer (0 = No Mask)
+    MOVEQ   R6,#0                         ; No Mask
+
+    ; Calculate size of Palette
+    SUBS    R4,R4,#44                     ; Size of Palette in bytes
+    MOVNE   R4,R4,LSR#3                   ; Convert size in bytes into number of Palette entries (8 bytes each)
+    CMPNE   R4,#256
+    MOVHI   R4,#256                       ; If more than 256 entries then limit to 256
+    STR     R4,[R12,#pal_size]            ; Will need this later when dealing with Palette
+
+    ; Copy palette from Sprite
+    CMP     R4,#0                         ; R4 = Number entries in Sprite Palette
+    BEQ     %FT10
+
+    ; Copy Sprite palette (Reducing 8 byte entries to 4 bytes)
+    ADD     R7,R2,#44                     ; R7 = Start of Palette data in Sprite
+    ADD     R8,R12,#pal_buffer            ; R8 = Address of palette in Workspace (max 256 entries)
+
+01
+    LDR     R0,[R7],#8                    ; Sprite palette is 8 bytes per entry - read 1st entry and skip 2nd
+    STR     R0,[R8],#4                    ; Palette buffer is 4 bytes per entry
+
+    SUBS    R4,R4,#1
+    BNE     %BT01
+
+10
+    ; Sprite Type
+    LDR     R7,[R2,#40]
+
+    ADD     R0,R10,R9                     ; R10 = Offset to Sprite Image from Sprite Header
+    STR     R0,[R12,#spr_DataAddr]        ; Address of start of Image
+
+    ; Extract details from Sprite Type
+
+    MOV     R9,#0                         ; R9 = spr_Flags
+
+    ; See if old format Sprite (pre-RISC OS 3.5): R7 = 0..255 though Modes 128..255 are invalid for Sprites
+    CMP     R7,#256
+    MOVLO   R0,R7
+    BICLO   R0,R0,#1:SHL:7                ; Ensure Mode shadow bit is clear
+    BLO     mode_number
+
+    ; If bit 0 clear then is a Mode Selector Block - Not supported
+    ANDS    R0,R7,#1
+    ADREQL  R0,err_sprite_unsupported
+    BEQ     IFC_Convert_Error
+
+
+    ; RISC OS 3.5 or 5 Sprite, so mask is either 1bpp or 8bpp or none
+
+    ANDS    R8,R7,#1:SHL:31
+    ORRNE   R8,R8,#1:SHL:3                ; NE if bit 31 set   = 8bpp mask
+    ORREQ   R8,R8,#1                      ; EQ if bit 31 clear = 1bpp mask
+
+    ORR     R9,R9,R8,LSL#9                ; Mask bpp in bits 9-12, Wide mask flag in bit 31
+
+    ; R9 = Sprite Type in bits 0-6, rgb/bgr flag in bit 7, alpha flag in bit 8, mask bpp in bits 9-12,
+    ;      Sprite bpp in bits 13-18, Double Pixel flag in bit 19, Greyscale palette flag in bit 20,
+    ;      Old format Sprite flag in bit 21, Processing Mask data flag in bit 22, Wide mask flag in bit 31
+
+    ; Now see if we have a RISC OS 3.5 or 5 type Sprite
+    MOV     R2,R7,LSR#27                  ; Type in bits 27-30
+    ANDS    R2,R2,#&0F
+    ADREQL  R0,err_sprite_mode_invalid    ; Type 0 is invalid
+    BEQ     IFC_Convert_Error
+
+    ; If Sprite Type = 15 then is a RISC OS 5 Sprite Mode Word else RISC OS 3.5 Sprite Mode Word
+
+    CMP     R2,#15
+    ADRHIL  R0,err_sprite_mode_invalid    ; Anything > 15 here is invalid
+    BHI     IFC_Convert_Error
+
+
+;;;;;; Not interested in DPI of Sprite
+;    ; Get DPI (EQ for RISC OS 5 Sprite)
+;    MOVEQ   R4,#180                       ; 180 >> 0 = 180, 180 >> 1 = 90, 180 >> 2 = 45, 180 >> 3 = 22
+;
+;    MOVEQ   R3,R7,LSR#6                   ; Y DPI is in bits 6-7 (eigen values 0..3)
+;    ANDEQ   R3,R3,#3
+;    MOVEQ   R3,R4,LSR R3                  ; R3 = 180 >> R3
+;
+;    MOVEQ   R0,R7,LSR#4                   ; X DPI is in bits 4-5 (eigen values 0..3)
+;    ANDEQ   R0,R0,#3
+;    MOVEQ   R0,R4,LSR R0                  ; R0 = 180 >> R0
+;    ;ORREQ   R3,R0,R3,LSL#16               ; Put into &yyyyXXXX format
+;
+;    ; Get DPI (LO for RISC OS 3.5 Sprite)
+;    MOVLO   R4,#&1F00
+;    ADDLO   R4,R4,#&FF                    ; R4 = &1FFF
+;
+;    MOVLO   R3,R7,LSR#14                  ; Y DPI is in bits 14-26
+;    ANDLO   R3,R3,R4
+;
+;    MOVLO   R0,R7,LSR#1                   ; X DPI is in bits 1-13
+;    ANDLO   R0,R0,R4
+;    ;ORRLO   R3,R0,R3,LSL#16               ; Put into &yyyyXXXX format
+;
+;    ORR     R3,R0,R3,LSL#16               ; Put into &yyyyXXXX format
+;    STR     R3,[R12,#spr_dpi]
+;;;;;;
+
+
+    BLO     riscos35
+
+
+    ; Sprite Type 15 = RISC OS 5 Sprite - Check bits are valid
+    MOV     R0,#&78000000
+    ADD     R0,R0,#&F3000                 ; &3000 = Need bits 12-13 to be 0 (Mode Flags = RGB)
+    ADD     R0,R0,#&0F
+    AND     R0,R7,R0
+    CMP     R0,#&78000001                 ; If (spr_Flags% AND &780F300F) <> &78000001 then not a valid RISC OS 5 Sprite
+    ADRNEL  R0,err_sprite_mode_invalid
+    BNE     IFC_Convert_Error
+
+    ; Bit 13 must be 0
+    TST     R7,#1:SHL:13                  ; If set (NE) - Not supported
+    ADRNEL  R0,err_sprite_unsupported
+    BNE     IFC_Convert_Error
+
+    ; Get actual Sprite Type (1-14,16) in bits 20-26
+    MOV     R2,R7,LSR#20
+    AND     R2,R2,#&7F
+
+    ; Bit 12 set then is CMYK, clear = RGB
+    TEQ     R2,#7                         ; For Type 7 (CMYK Sprite) then we ignore this flag
+    TSTNE   R7,#1:SHL:12                  ; CMYK if set (NE)
+    ADRNEL  R0,err_sprite_unsupported     ; We don't support CMYK colour space in other Sprite Types
+    BNE     IFC_Convert_Error
+
+    ; Ensure that Alpha bit is only set for Types 5, 6 and 16
+    TEQ     R2,#5
+    TEQNE   R2,#6
+    TEQNE   R2,#16
+    BICNE   R7,R7,#1:SHL:15               ; Not 5, 6 or 16 so ensure Alpha bit is clear
+
+    ; Get RGB/BGR ordering and Alpha channel bits
+    AND     R0,R7,#2_11:SHL:14            ; Bit 14 set = RGB ordering instead of BGR, bit 15 set = Alpha channel used
+    ORR     R9,R9,R0,LSR#7                ; Shift into bits 7 and 8 of spr_Flags
+
+    ; If we have Alpha channel then make sure Mask ptr = 0
+    TST     R9,#1:SHL:8                   ; Alpha channel if bit 8 set (NE)
+    MOVNE   R0,#0
+    STRNE   R0,[R12,#mask_DataAddr]       ; Ensure we have no mask, if we have Alpha channel
+
+    ; Greyscale palette?
+    AND     R0,R7,#1:SHL:9                ; Bit 9 set = Greyscale palette
+    ORR     R9,R9,R0,LSL#11               ; Shift into bit 20 of spr_Flags
+
+    ; Drop through to riscos35
+
+
+    ; R1 = Mask offset, R2 = Sprite Type (1-16), R5 = width*4, R6 = Mask Addr, R7 = Sprite Mode Word, R11 = End of Sprite offset
+    ; R9 = Sprite Type in bits 0-6, rgb/bgr flag in bit 7, alpha flag in bit 8, mask bpp in bits 9-12,
+    ;      Sprite bpp in bits 13-18, Double Pixel flag in bit 19, Greyscale palette flag in bit 20,
+    ;      Old format Sprite flag in bit 21, Processing Mask data flag in bit 22, Wide mask flag in bit 31
+
+
+riscos35
+
+    ORR     R9,R9,R2                      ; Add Sprite Type to bits 0-6
+
+
+; Sprite Types we can handle: 1-8, 10, 16
+
+; Type  1:  1 bpp   2 colours
+; Type  2:  2 bpp   4 colours
+; Type  3:  4 bpp  16 colours
+; Type  4:  8 bpp 256 colours
+; Type  5: 16 bpp 32K colours (1:5:5:5 TBGR/TRGB/ABGR/ARGB)
+; Type  6: 32 bpp 16M colours (8:8:8:8 TBGR/TRGB/ABGR/ARGB)
+; Type  7: 32 bpp CMYK
+; Type  8: 24 bpp 16M colours (  8:8:8  BGR)
+; Type  9: JPEG                                           - Not supported
+; Type 10: 16 bpp 64K colours (  5:6:5  BGR/ RGB)
+; Type 16: 16 bpp  4K colours (4:4:4:4 TBGR/TRGB/ABGR/ARGB)
+
+
+; Types 1-4 ...
+    CMP     R2,#5                         ; Sprite bpp = 1 << (Sprite Type - 1)
+    BEQ     %FT16                         ; Handle Type 5 (16 bpp)
+    BHI     %FT08                         ; Handle Types 6-16
+
+    SUB     R3,R2,#1                      ; R3 = log2bpp = (Sprite Type - 1)
+    MOV     R0,#1
+    MOV     R0,R0,LSL R3                  ; R0 = Sprite bpp, R3 = log2bpp
+    ORR     R9,R9,R0,LSL#13               ; Sprite bpp in bits 13-18
+
+    ; Calculate width (taking wastage into account) (in pixels)
+    ; (width*4 * log2bpp) - lh bit - rh bit
+
+    ; To go from pixels width to Sprite values:
+    ; width = pixels * bpp : rh bit = (-width AND 31)
+    ; widthInWords = ((width + rh bit) >> 5)-1 : rh bit = 31 - rh bit : lh bit = 0
+
+    ; widthInWords = (((pixels * bpp) + 32) AND (NOT(31))) >> 5) - 1
+    ; rh bit = 31 - ((-(pixels * bpp)) AND 31)
+
+    LDR     R7,[R12,#spr_LeftBits]
+    MOV     R7,R7,LSR R3                  ; Divide lh bit by log2bpp (Convert into pixels)
+    STR     R7,[R12,#spr_LeftBits]        ; Store lh bit in pixels
+
+    LDR     R0,[R12,#spr_RightBits]
+    RSB     R0,R0,#31                     ; = 31 - rh bit = unused rh bits
+    MOV     R0,R0,LSR R3                  ; Divide rh bit by log2bpp (Convert into pixels)
+
+    RSB     R8,R3,#3                      ; R8 = 3 - R3 (= 3,2,1,0)
+    MOV     R4,R5,LSL R8                  ; R4 = width*4 << R8 (Convert width into pixels)
+    SUB     R4,R4,R7                      ; R4 = width - lh pixels (R7)
+    SUB     R4,R4,R0                      ; Width of actual Sprite pixels (less wastage) = R4 - rh bit (R0)
+    STR     R4,[R12,#width]               ; Store width in pixels
+    STR     R4,[R12,#QOI_Width]           ; Store width in pixels
+
+
+    ; Drop through to calc_mask_size
+
+
+calc_mask_size
+    ; Calculate Mask size
+
+    CMP     R6,#0
+    BEQ     check_palette                 ; If no Mask then skip checking Mask size
+
+    TST     R9,#1:SHL:31                  ; Is Wide mask flag set in bit 31?
+    MOVNE   R8,#2                         ; It is (NE) then Mask is 8bpp so divide width in pixels by 4
+    MOVEQ   R8,#5                         ; It isn't (EQ) then Mask is 1bpp so divide width in pixels by 32
+    MOV     R3,R4,LSR R8                  ; Convert width in pixels into Words
+    MOV     R0,R3,LSL R8                  ; and then convert Words back into pixels
+
+    CMP     R0,R4                         ; and see if width fits into whole Words (if so then R0 = R4)
+    ADDNE   R3,R3,#1                      ; Not equal so need another Word for Mask line length
+    MOV     R7,R3,LSL#2                   ; Turn Words into bytes
+    LDR     R8,[R12,#QOI_Height]          ; R8 = height
+    MUL     R0,R8,R7                      ; R7 = Length of Mask line in bytes
+
+    B       check_mask_size
+
+
+08
+; Type 8 ...
+    CMP     R2,#8
+    BNE     %FT67
+    MOV     R0,#24                        ; Sprite bpp
+    ORR     R9,R9,R0,LSL#13               ; Sprite bpp in bits 13-18
+
+    ; Calculate width (in pixels)
+    ; Divide width*4 by 3, and if rh bit = 23 then decrement width by 1
+    SUB     R4,R5,R5,LSR#2                ; Divide by 3 = 75%
+    SUB     R4,R4,R4,LSR#3                ;             = 65.625%
+    ADD     R4,R4,R4,LSR#6                ;             = 66.6503906%
+    MOV     R4,R4,LSR#1                   ;             = 33.3251953%
+
+    LDR     R7,[R12,#spr_LeftBits]        ; In bits
+    CMP     R7,#0
+    SUBNE   R4,R4,#1                      ; R4 = width - lh pixels (R7). Non-zero = 1 pixel (Must be multiple of bpp)
+    MOVNE   R7,#3                         ; Convert lh bits into bytes to be skipped
+    STRNE   R7,[R12,#spr_LeftBits]        ; In bytes
+
+    LDR     R0,[R12,#spr_RightBits]       ; rh bit is either 31, 23, 15 or 7
+    CMP     R0,#23                        ; Convert rh bits to bytes
+    SUBEQ   R4,R4,#1                      ; If rh bit = 23 then need to adjust R4 = R4 - 1
+    RSB     R0,R0,#31                     ; = 31 - rh bits (31, 23, 15 or 7) = (0, 8, 16 or 24)
+    MOV     R0,R0,LSR#3                   ; Divide rh bits by 8 (Convert into bytes)
+    STR     R0,[R12,#spr_RightBits]       ; rh bit is either 0, 1, 2 or 3 bytes
+
+    STR     R4,[R12,#width]               ; Store width in pixels
+    STR     R4,[R12,#QOI_Width]           ; Store width in pixels
+
+    B       calc_mask_size
+
+
+67
+; Types 6-7 ...
+    CMP     R2,#7                         ; Handle Types 6-7 (32 bpp)
+    MOVLS   R0,#32                        ; Sprite bpp
+    ORRLS   R9,R9,R0,LSL#13               ; Sprite bpp in bits 13-18
+
+    ; Calculate width (in pixels) - lh bit is 0, rh bit is 31
+    ; Just divide width*4 by 4
+    MOVLS   R4,R5,LSR#2                   ; R4 = width / 4
+    STRLS   R4,[R12,#width]               ; Store width in pixels
+    STRLS   R4,[R12,#QOI_Width]           ; Store width in pixels
+
+    BLS     calc_mask_size
+
+
+; Unsupported types ...
+    CMP     R2,#10
+    CMPNE   R2,#16
+    ADRNEL  R0,err_sprite_unsupported
+    BNE     IFC_Convert_Error
+
+
+16
+; Types 5, 10, 16 (16 bpp) ...
+    MOV     R0,#16                        ; Sprite bpp
+    ORR     R9,R9,R0,LSL#13               ; Sprite bpp in bits 13-18
+
+    ; Calculate width (in pixels)
+    ; Divide width*4 by 2, and if rh bit = 15 then decrement width by 1
+    MOV     R4,R5,LSR#1                   ; R4 = width / 2
+    LDR     R7,[R12,#spr_LeftBits]        ; In bits
+    CMP     R7,#0
+    SUBNE   R4,R4,#1                      ; R4 = width - lh pixels (R7). Non-zero = 1 pixel (Must be multiple of bpp)
+    MOVNE   R7,#2                         ; Convert lh bits into bytes to be skipped
+    STRNE   R7,[R12,#spr_LeftBits]        ; In bytes
+
+    LDR     R0,[R12,#spr_RightBits]       ; rh bit is either 31 or 15
+    CMP     R0,#15                        ; Convert rh bits to bytes
+    SUBEQ   R4,R4,#1                      ; If rh bit = 15 then need to adjust R4 = R4 - 1
+    RSB     R0,R0,#31                     ; = 31 - rh bits (31 or 15) = (0 or 16)
+    MOV     R0,R0,LSR#3                   ; Divide rh bits by 8 (Convert into bytes)
+    STR     R0,[R12,#spr_RightBits]       ; rh bit is either 0 or 2 bytes
+
+    STR     R4,[R12,#width]               ; Store width in pixels
+    STR     R4,[R12,#QOI_Width]           ; Store width in pixels
+
+    B       calc_mask_size
+
+
+mode_number   FunctionSig
+; Calculate Sprite Type (1-4) from Mode Number ...
+
+; R0  = Mode Number, R1 = Mask offset, R5 = width*4, R6 = Mask Addr, R9 = 0, R10 = Offset to sprite image data from Sprite Header
+; R11 = End of Sprite offset
+; R9  = Sprite Type in bits 0-6, rgb/bgr flag in bit 7, alpha flag in bit 8, mask bpp in bits 9-12,
+;       Sprite bpp in bits 13-18, Double Pixel flag in bit 19, Greyscale palette flag in bit 23,
+;       Old format Sprite flag in bit 21, Processing Mask data flag in bit 22, Wide mask flag in bit 31
+
+    STR     R1,[R13,#-4]!                 ; Preserve R1
+
+;;;;;; Not interested in DPI of Sprite
+;    ; Get DPI for Mode
+;    MOV     R3,#90                        ; Default DPI to 90
+;    ORR     R3,R3,R3,LSL#16               ; Put into &yyyyXXXX format
+;
+;    MOV     R1,#4                         ; Get X eigen for Mode
+;    SWI     XOS_ReadModeVariable          ; Value returned in R2
+;    MOVCC   R4,#180                       ; 180 >> 0 = 180, 180 >> 1 = 90, 180 >> 2 = 45, 180 >> 3 = 22
+;    MOVCC   R3,R4,LSR R2
+;    MOVCC   R1,#5                         ; Get Y eigen for Mode
+;    SWICC   XOS_ReadModeVariable          ; Value returned in R2
+;    MOVCC   R2,R4,LSR R2
+;    ORRCC   R3,R3,R2,LSL#16               ; Put into &yyyyXXXX format
+;
+;    STR     R3,[R12,#spr_dpi]
+;;;;;;
+
+    ; Get log2bpp of Mode
+    MOV     R1,#9                         ; log2bpp of Mode
+    SWI     XOS_ReadModeVariable          ; Value returned in R2
+    ADRCSL  R0,err_sprite_mode_invalid
+    BCS     IFC_Convert_Error
+
+    ADD     R3,R2,#1                      ; R3 = Sprite Type = log2bpp + 1
+
+    MOV     R7,#1
+    MOV     R7,R7,LSL R2                  ; R7 = Sprite bpp (1,2,4,8)
+
+    ORR     R9,R3,R7,LSL#13               ; Sprite Type (R3) in bits 0-6 + Sprite bpp (R7) in bits 13-18
+    ORR     R9,R9,R7,LSL#9                ; Mask bpp in bits 9-12 is same as Sprite bpp
+
+    ; Check for double pixel mode. R3 = log2bpp + 1
+    ; Mode  4: 1 bpp,   2 colours         ; Mode  5: 2 bpp,   4 colours
+    ; Mode  2: 4 bpp,  16 colours         ; Mode 10: 8 bpp, 256 colours
+
+    ; Eg 34 x 17 (Mode 4 2bpp) is actually 17 x 17 (Mode 4) but each row actually takes up 34 bits
+
+    MOV     R1,#10                        ; log2bpc of Mode
+    SWI     XOS_ReadModeVariable
+    CMP     R2,R3                         ; Is a double pixel mode if log2bpc (R2) = log2bpp + 1 (R3)
+
+    ORREQ   R9,R9,#1:SHL:19               ; Bit 19 = Double pixel mode flag
+
+    MOV     R2,R3                         ; R2 = Sprite Type
+
+    SUB     R3,R3,#1                      ; R3 = log2bpp = (Sprite Type - 1)
+
+    ; Calculate width (taking wastage into account) (in pixels)
+    ; (width*4 * log2bpp) - lh bit - rh bit
+    LDR     R7,[R12,#spr_LeftBits]
+    MOV     R7,R7,LSR R3                  ; Divide lh bit by log2bpp (Convert into pixels)
+    STR     R7,[R12,#spr_LeftBits]        ; Store lh bit in pixels
+
+    LDR     R0,[R12,#spr_RightBits]
+    RSB     R0,R0,#31                     ; = 31 - rh bit
+    MOV     R0,R0,LSR R3                  ; Divide rh bit by log2bpp (Convert into pixels)
+
+    RSB     R8,R3,#3                      ; R8 = 3 - R3 (= 3,2,1,0)
+    MOV     R4,R5,LSL R8                  ; R4 = width*4 << R8 (Convert width into pixels)
+    SUB     R4,R4,R7                      ; R4 = width - lh pixels (R7)
+    SUB     R4,R4,R0                      ; Width of actual Sprite pixels (less wastage) = R4 - rh bit (R0)
+    ; If double pixel then half the width
+    MOVEQ   R4,R4,LSR#1
+    STR     R4,[R12,#width]               ; Store width in pixels
+    STR     R4,[R12,#QOI_Width]           ; Store width in pixels
+
+    ORR     R9,R9,#1:SHL:21               ; Set Old format Sprite flag in bit 21
+
+    LDR     R1,[R13],#4                   ; Restore R1
+
+    CMP     R6,#0
+    BEQ     check_palette                 ; If no Mask then skip checking Mask size
+
+    ; Calculate Mask size - is same as Image size
+    LDR     R8,[R12,#QOI_Height]          ; R8 = height
+    MUL     R0,R8,R5                      ; R0 = height * width*4 (in bytes)
+    MOV     R7,R5                         ; R7 (Length of Mask line) = length of Sprite line (width*4)
+
+    ; Drop through to check_mask_size
+
+
+check_mask_size
+    ; Check Mask size is within the Sprite
+
+    ADD     R1,R1,R0                      ; R1 = End of Mask = Offset to Mask + Size of Mask
+    CMP     R1,R11
+    ADRHIL  R0,err_ConverterCorruptData    ; If R1 > R11 then error
+    BHI     IFC_Convert_Error
+
+; Set up Mask details before we start processing the line:
+
+    ; Preserve registers: R2,R5,R9
+
+    MOV     R7,R9,LSR#9                   ; R7 = Mask bpp (1,2,4,8) in bits 9-12
+    AND     R7,R7,#&0F
+
+    MOV     R10,#1
+    MOV     R10,R10,LSL R7                ; 1 << bpp                 (1bpp = 2, 2bpp = 4,   4bpp = 16,    8bpp = 256)
+    SUB     R10,R10,#1                    ; bitmask = (1 << bpp) - 1 (1bpp = 1, 2bpp = %11, 4bpp = %1111, 8bpp = &FF)
+
+    ; Calculate log2bpp ...
+    ANDS    R8,R9,#1:SHL:21               ; Are we processing an Old format Sprite (NE)?
+    ; If not then New format Sprite (Mask bpp =1 or =8), then R8 = log2bpp = 0 (1bpp)
+    ANDNE   R8,R9,#&7F                    ; Yes (Mask bpp = Image bpp), then Sprite Type in bits 0-6 (Types 1-4)
+    SUBNE   R8,R8,#1                      ; set log2bpp = Sprite Type - 1 (Type 1 = 0, Type 2 = 1, Type 3 = 2, Type 4 = 3)
+    TST     R9,#1:SHL:31                  ; Is Wide Mask flag set (NE) - New format Sprites only
+    MOVNE   R8,#3                         ; Yes, so set log2bpp = 3 (8bpp)
+
+    ; See if Double pixel flag set (bit 19)
+    TST     R9,#1:SHL:19
+    ADDNE   R8,R8,#1                      ; Yes (NE), then log2bpp = log2bpp + 1
+
+    MOV     R7,#1
+    MOV     R8,R7,LSL R8                  ; R8 = 1 << log2bpp
+
+    ADD     R0,R12,#(mask_LoopData+8)
+    STMIA   R0,{R8,R10}
+    ; lh bits, Mask Word, R8=1 << log2bpp, R10=Mask bitmask
+
+
+    ; Drop through to check_palette
+
+
+check_palette
+
+    STR     R9,[R12,#spr_Flags]           ; Store Sprite Flag values
+
+    ; Set QOI channels (3 or 4 if have Alpha channel or Mask or not)
+
+    MOV     R0,#3                         ; Channels = 3 (RGB)
+
+    ; R9 = Sprite Type in bits 0-6, rgb/bgr flag in bit 7, alpha flag in bit 8, mask bpp in bits 9-12,
+    ;      Sprite bpp in bits 13-18, Double Pixel flag in bit 19, Greyscale palette flag in bit 23,
+    ;      Old format Sprite flag in bit 21, Processing Mask data flag in bit 22, Wide mask flag in bit 31
+
+
+    ; IF (mask%) OR (alpha%) THEN channels% = 4 ELSE channels% = 3
+    CMP     R6,#0
+    TSTEQ   R9,#1:SHL:8                   ; No Mask (R6=0 (EQ)), so see if bit 8 (Alpha channel) set (NE)
+    MOVNE   R0,#4                         ; If Mask or Alpha channel (NE) then channels = 4 (ARGB)
+
+    ; IF sprType% = 7 THEN channels% = 4 (CMYK)
+    CMP     R2,#7                         ; If Sprite Type = 7 (CMYK)
+    MOVEQ   R0,#4                         ; then channels  = 4 (ARGB)
+
+    ; Add in the Colour Space byte (always 1)
+    ORR     R0,R0,#&100
+    STR     R0,[R12,#QOI_ChanColspc]
+
+    ; If Sprite Type >= 5 then skip palette
+    CMP     R2,#5
+    BHS     load_pal_done
+
+
+; R2 = Sprite Type (1-16), R5 = width*4, R6 = Mask Addr
+; R9 = Sprite Type in bits 0-6, rgb/bgr flag in bit 7, alpha flag in bit 8, mask bpp in bits 9-12,
+;      Sprite bpp in bits 13-18, Double Pixel flag in bit 19, Greyscale palette flag in bit 23,
+;      Old format Sprite flag in bit 21, Processing Mask data flag in bit 22, Wide mask flag in bit 31
+
+
+    ; Palette already copied from Sprite into Palette workspace
+    ; Now need to check we have enough palette entries for the Sprite Type, and if not add in the missing entries
+
+    ; If Type 1 (1 bpp) and palette <   2 then add default palette colours to make up   2 entries
+    ; If Type 2 (2 bpp) and palette <   4 then add default palette colours to make up   4 entries
+    ; If Type 3 (4 bpp) and palette <  16 then add default palette colours to make up  16 entries
+    ; If Type 4 (8 bpp) and palette < 256 then add default palette colours to make up 256 entries
+
+
+    ADD     R10,R12,#pal_buffer           ; R10 = Address of palette in Workspace
+    AND     R7,R9,#1:SHL:20               ; If Bit 20 set then have a Greyscale palette (Sprite Types 3 and 4 only)
+
+    LDR     R9,[R12,#pal_size]            ; R9  = Number entries in palette
+
+    CMP     R2,#3                         ; Type 3 (4bpp)
+    BEQ     %FT04
+    CMP     R2,#2                         ; Type 2 (2bpp)
+    BEQ     %FT02
+    BHI     %FT08                         ; Type 4 (8bpp)
+
+    ; Drop through to Type 1 (1bpp)
+
+01
+    ; Palette is already Greyscale so ignore spr_Flags bit 20
+    CMP     R9,#2                         ; 1bpp should have 2 colours
+    MOVHI   R9,#2
+    BHS     load_pal_shift                ; Have enough entries
+
+    ; Add in missing colours (R9 = 0 or 1)
+    ; Palette is: &FFFFFF00, &00000000
+
+    RSBS    R0,R9,#1                      ; R0 = 1-R9 = 1 or 0
+    MOVHI   R1,#-1                        ; 1st colour: &FFFFFF00
+    STRHI   R1,[R10,#0]
+    MOV     R1,#0                         ; 2nd colour: &00000000
+    STR     R1,[R10,#4]
+    MOV     R9,#2                         ; Number of colours
+    B       load_pal_shift
+
+
+four_colours
+    ; Palette entries
+    DCD     &FFFFFF00, &BBBBBB00, &77777700, &00000000
+
+02
+    ; Palette is already Greyscale so ignore spr_Flags bit 20
+    CMP     R9,#4                         ; 2bpp should have 4 colours
+    MOVHI   R9,#4
+    BHS     load_pal_shift                ; Have enough entries
+
+    ; Add in missing colours (R9 = 0,1,2 or 3)
+    ; Palette is: &FFFFFF00, &BBBBBB00, &77777700, &00000000
+
+    RSB     R0,R9,#4                      ; R0 = 4-R9 = 4,3,2 or 1 (Number of colours to add)
+    ADR     R2,four_colours
+    CMP     R0,#4
+    MOVEQ   R1,#-1                        ; 1st colour: &FFFFFF00
+    STREQ   R1,[R10,#0]
+    SUBEQ   R0,R0,#1
+    CMP     R0,#3
+    LDREQ   R1,[R2,#4]                    ; 2nd colour: &BBBBBB00
+    STREQ   R1,[R10,#4]
+    SUBEQ   R0,R0,#1
+    CMP     R0,#2
+    LDREQ   R1,[R2,#8]                    ; 3rd colour: &77777700
+    STREQ   R1,[R10,#8]
+    MOV     R1,#0                         ; 4th colour: &00000000
+    STR     R1,[R10,#12]
+    MOV     R9,#4                         ; Number of colours
+    B       load_pal_shift
+
+
+true_word
+    DCD     &45555254                     ; = "TRUE"
+
+04
+    CMP     R9,#16                        ; 4bpp should have 16 colours
+    MOVHI   R9,#16
+    BHS     load_pal_shift                ; Have enough entries
+
+    ; See if bit 9 Greyscale flag is set
+    CMP     R7,#0
+    BNE     grey16                        ; Yes, so use Greyscale palette
+
+    ; Add in missing colours (R9 = 0-15)
+    ADD     R1,R10,#(16*4)                ; Start of memory to store 20 word Wimp palette (After reserving space for 16 Words)
+    LDR     R2,true_word                  ; Return colours in &BBGGRR00 format
+    SWI     Wimp_ReadPalette
+    MOV     R2,R1
+    RSB     R0,R9,#16                     ; R0 = 16-R9 = number of missing entries (1..16)
+    MOV     R9,#16                        ; Start at end: palette entry 16
+16
+    SUB     R9,R9,#1
+    LDR     R1,[R2,R9,LSL#2]              ; Read colour from Wimp palette
+    STR     R1,[R10,R9,LSL#2]             ; and store in our palette
+    SUBS    R0,R0,#1
+    BNE     %BT16
+    MOV     R9,#16                        ; Number of colours
+    B       load_pal_shift
+
+
+grey16        FunctionSig
+    ; Create 4 bpp Greyscale palette (&BBGGRR00 format) - 1bpp and 2bpp use current palette
+    ; FOR i% = 0 TO 15 : rgb% = i%+(i%<<4) : paletteAddr%!(i%*4) = (rgb%<<8)+(rgb%<<16)+(rgb%<<24) : NEXT
+    ; Eg Palette entry 1 = &11111100, entry 6 = &66666600
+
+    RSB     R0,R9,#16                     ; R0 = 16-R9 = number of missing entries (1..16)
+    MOV     R9,#16                        ; Start at end: palette entry 16
+grey16_loop
+    SUB     R9,R9,#1                      ; (P)
+    ORR     R1,R9,R9,LSL#4                ; Duplicate Palette entry number in bottom 4 bits to top 4 bits (PP)
+    ORR     R1,R1,R1,LSL#8                ; Duplicate bottom byte into next byte (ppPP)
+    ORR     R1,R1,R1,LSL#16               ; Duplicate bottom 2 bytes into top 2 bytes (ppPPppPP)
+    ;MOV     R1,R1,LSL#8                   ; Shift up to make it (BBGGRR00) - No need as will shift it down
+    STR     R1,[R10,R9,LSL#2]             ; and store in our palette
+    SUBS    R0,R0,#1
+    BNE     grey16_loop
+    MOV     R9,#16                        ; Number of colours
+    B       load_pal_shift
+
+
+
+grey256       FunctionSig
+    ; Create 8 bpp Greyscale palette (&BBGGRR00 format)
+    ; FOR i% = 0 TO 255 : rgb% = (i%<<8)+(i%<<16)+(i%<<24) : paletteAddr%!(i%*4) = i% : NEXT
+    ; Eg Palette entry 1 = &01010100, entry 6 = &06060600
+    RSB     R0,R9,#256                    ; R0 = 256-R9 = number of missing entries (1..256)
+    MOV     R9,#256                       ; Start at end: palette entry 256
+grey256_loop
+    SUB     R9,R9,#1                      ; (PP)
+    ORR     R1,R9,R9,LSL#8                ; Duplicate Palette entry number in bottom byte into next byte (ppPP)
+    ORR     R1,R1,R1,LSL#16               ; Duplicate bottom 2 bytes into top 2 bytes (ppPPppPP)
+    ;MOV     R1,R1,LSL#8                   ; Shift up to make it (BBGGRR00) - No need as will shift it down
+    STR     R1,[R10,R9,LSL#2]             ; and store in our palette
+    SUBS    R0,R0,#1
+    BNE     grey256_loop
+    MOV     R9,#256                       ; Number of colours
+    B       load_pal_shift
+
+
+; Deal with 8 bpp palette ...
+
+08
+    CMP     R9,#256                       ; Create a 256 entry palette for 8 bpp
+    MOVHI   R9,#256
+    BHS     load_pal_shift                ; Have enough entries
+
+    ; See if bit 9 Greyscale flag is set
+    CMP     R7,#0
+    BNE     grey256                       ; Yes, so use Greyscale palette
+
+    ; Add in missing colours (R9 = 0-255)
+    ; We claim 1k from RMA and use ColourTrans_ReadPalette to create palette for us and then just copy over entries
+    ; as we did for 4bpp 16 colours:
+
+;    LDR     R2,[R11,#268]                 ; R2 = Address of scratch buffer (64Kb)
+;    MOV     R3,#(256*4)                   ; Size of palette in bytes
+
+    ;STR     R3,[R13,#-4]!                 ; Preserve R3
+    MOV     R0,#6
+    MOV     R3,#(256*4)                   ; Size of palette in bytes
+    SWI     XOS_Module                    ; Claim memory from RMA to hold palette
+    ;LDRVS   R3,[R13],#4                   ; Restore R3
+    ;;BVS     %FT56                         ; If can't claim memory then have to do it ourselves
+    BVS     IFC_Convert_Error
+
+    MOV     R0,#28                        ; Get palette for Mode 28
+    MOV     R1,#0
+    MOV     R4,#0                         ; Flags
+    MOV     R7,R2                         ; Preserve R2
+    ; R2 = Address of buffer in RMA
+    ; R3 = Size of buffer
+    SWI     ColourTrans_ReadPalette
+    ;LDR     R3,[R13],#4                   ; Restore R3
+    RSB     R0,R9,#256                    ; R0 = 256-R9 = number of missing entries (1..256)
+    MOV     R9,#256                       ; Start at end: palette entry 256
+    ;MOV     R2,R7                         ; Restore R2
+
+09
+    SUB     R9,R9,#1
+    LDR     R1,[R7,R9,LSL#2]              ; Read colour from ColourTrans palette
+    STR     R1,[R10,R9,LSL#2]             ; and store in our palette
+    SUBS    R0,R0,#1
+    BNE     %BT09
+    MOV     R0,#7
+    MOV     R2,R7
+    SWI     XOS_Module                    ; And free memory block in RMA
+    MOV     R9,#256
+    ;B       load_pal_shift
+
+;56
+;    ; but if can't get the memory then we do it ourselves ...
+;    RSB     R0,R9,#256                    ; R0 = 256-R9 = number of missing entries (1..256)
+;    STMFD   R13!,{R3-R6}
+;    MOV     R9,#256                       ; Start at end: palette entry 256
+;57
+;    SUB     R9,R9,#1
+;    AND     R3,R9,#7                      ; %00000111 ; Get bits 0-2
+;    AND     R4,R9,#1:SHL:4                ; %00010000 ; Get bit 4
+;    ORR     R2,R3,R4,LSR#1                ; %00001111
+;    AND     R3,R9,#3                      ; %00000011 ; Get bits 0-1
+;    AND     R4,R9,#3:SHL:5                ; %01100000 ; Get bits 5 and 6
+;    ORR     R6,R3,R4,LSR#3                ; %00001111
+;    ;AND     R3,R9,#3                      ; %00000011 ; Get bits 0-1
+;    AND     R4,R9,#1:SHL:3                ; %00001000 ; Get bit 3
+;    ORR     R4,R3,R4,LSR#1                ; %00000111
+;    AND     R5,R9,#1:SHL:7                ; %10000000 ; Get bit 7
+;    ORR     R5,R4,R5,LSR#4
+;    ORR     R2,R2,R2,LSL#4
+;    ORR     R6,R6,R6,LSL#4
+;    ORR     R5,R5,R5,LSL#4
+;    MOV     R1,R5,LSL#16
+;    ORR     R1,R1,R6,LSL#8
+;    ORR     R1,R1,R2
+;    STR     R1,[R10,R9,LSL#2]             ; Store at R10 + (R9 * 4)
+;    SUBS    R0,R0,#1
+;    BNE     %BT57
+;    LDMFD   R13!,{R3-R6}
+;    MOV     R9,#256
+
+
+    ; Drop through to load_pal_shift
+
+
+load_pal_shift
+    ; Shift each palette entry down by 8 bits from &BBGGRR00 to &FFBBGGRR
+    SUBS    R9,R9,#1
+    LDR     R1,[R10,R9,LSL#2]             ; Get palette entry (in &BBGGRR00 format)
+    MOV     R1,R1,LSR#8                   ; Shift to &00BBGGRR format
+    ORR     R1,R1,#&FF:SHL:24             ; Add in solid Mask &FF
+    STR     R1,[R10,R9,LSL#2]             ; Store palette entry
+    BNE     load_pal_shift                ; Next entry
+
+
+load_pal_done
+    ; R5 = width*4, R6 = Mask Addr
+
+    ; Check QOI buffer is large enough (qoiData% + QOI_HEADER_SIZE% < qoiDataSize%)
+    LDR     R10,[R12,#qoi_fptr]
+    LDR     R11,[R12,#qoi_DataSize]
+
+    SUBS    R11,R11,#QOI_HEADER_SIZE
+    MOVMIS  R11,#0                        ; if R11 -ve then clamp R11 = 0 setting Z flag. If R11 = 0 then Z flag already set
+    ADDEQ   R10,R10,#QOI_HEADER_SIZE      ; Increase buffer to keep track of size required
+
+
+    ADDNE   R0,R12,#QOI_Magic
+    LDMNEIA R0,{R1,R4,R8,R9}
+    LDREQ   R8,[R12,#QOI_Height]          ; R8 = height
+
+    ; Width and Height are stored in Big Endian in QOI file, so need swapping from Little Endian
+
+    ; Swap endian (width)
+    ;REVNE   R2,R4                         ; ARMv6
+    EORNE   R0,R4,R4,ROR#16
+    BICNE   R0,R0,#&FF0000
+    MOVNE   R2,R4,ROR#8
+    EORNE   R2,R2,R0,LSR#8
+
+    ; Swap endian (height)
+    ;REVNE   R3,R8                         ; ARMv6
+    EORNE   R0,R8,R8,ROR#16
+    BICNE   R0,R0,#&FF0000
+    MOVNE   R3,R8,ROR#8
+    EORNE   R3,R3,R0,LSR#8
+
+    ; Write QOI Header: Magic, Width, Height, ChanColspc
+    STMNEIA R10,{R1,R2,R3,R9}
+    ADDNE   R10,R10,#QOI_HEADER_SIZE      ; Increase buffer to keep track of size required
+    STR     R10,[R12,#qoi_fptr]
+    STR     R11,[R12,#qoi_DataSize]
+
+
+;--------------------------- Process Sprite pixels into QOI chunks ----------------------;
+
+
+    B       process_sprite                ; Once Sprite processed, will jump to IFC_Spr2Qoi_Exit
+
+
+IFC_Spr2Qoi_Exit
+
+; On Entry:
+; If R1 = -1 then R0 = Ptr to error block
+; If R1 <> -1 and R0 <> 0 then buffer is too small, and R0 = Ptr to error block (err_BufSize), R1 = size of buffer required
+; If R1 <> -1 and R0 = 0 then buffer is either more than needed or just enough, R1 = size of buffer used
+
+
+    ; Error writing to disc? (R1 = -1, R0 = Ptr to error block)
+    CMN     R1,#1
+    BEQ     IFC_Convert_Error
+
+    ; Buffer not OK - so if no buffer specified (we want to know buffer size reqd) then return size reqd in R5 else return error 1
+    CMP     R0,#0
+    CMPNE   R4,#0                         ; Buffer specified (R4 <> 0 or R5 <> 0)
+    CMPNE   R5,#0
+    MOVNE   R0,#err_ConverterOutputBufferTooSmall ; =1
+    BNE     IFC_Convert_Error
+
+
+;    MOV     R3,R0                         ; Preserve R0
+;    MOV     R4,R1                         ; Preserve R1
+;    ; Check for Escape pressed in case we missed it
+;    SWI     OS_ReadEscapeState            ; C is set if Escape has been pressed
+;    MOVCS   R0,#124                       ; If so, then call OS_Byte 124 to clear Esc condition
+;    SWICS   OS_Byte
+;
+;    ; Restore Escape conditions to when we started
+;    MOV     R0,#229
+;    LDR     R1,[R12,#esc_state]           ; Current state (0=Enabled, <>0=Disabled)
+;    MOV     R2,#0
+;    SWI     OS_Byte
+;    MOV     R0,R3                         ; Restore R0
+;    MOV     R1,R4                         ; Restore R1
+
+    SWI     XHourglass_Off
+
+
+    ; Buffer OK
+
+
+    ; Copy Sprite name into Palette buffer
+    MOV     R0,#12                        ; Length of sprite name
+    LDR     R7,[R12,#spr_Name]            ; Start address of Sprite name
+    ADD     R9,R12,#pal_buffer
+
+    ; Copy characters, converting to lowercase and zero-pad to R1 bytes
+31
+    LDRB    R10,[R7],#1
+    ; lowercase characters A-Z in R10. Uses R14 just to set flag
+    CMP     R10,#"A"                      ; if R10 >= "A"
+    RSBHSS  R14,R10,#"Z"                  ; and "Z" >= R10
+    ADDHS   R10,R10,#32                   ; then make lowercase
+    CMP     R10,#32                       ; have we reached terminator? (space or ctrl character)
+    STRHIB  R10,[R9],#1                   ; No, so store character
+    SUBHIS  R0,R0,#1
+    BHI %BT31
+
+    ADD     R0,R0,#1                      ; Ensure we add 0 terminator even if Sprite name is 12 bytes long
+    ; Add zero padding
+    CMP     R0,#0                         ; Done 12 bytes of sprite name?
+    MOVNE   R10,#0                        ; No, then pad with zeroes
+32
+    STRNEB  R10,[R9],#1
+    SUBNES  R0,R0,#1
+    BNE %BT32
+
+
+    MOV     R0,R1                         ; R1 = Buffer size required
+    LDMFD   R13!,{R1-R11,R14}             ; Restore entry registers
+
+    ; On exit need to restore R0 flags from workspace, and return buffer reqd/used in R5
+    MOV     R5,R0
+    LDR     R0,[R12,#IFC_R0]              ; Restore flags in R0
+
+    ADD     R7,R12,#pal_buffer            ; R7 = Pointer to Sprite name (0 terminated)
+
+    ; Exit, making sure V flag is clear
+    CMP     PC,#0
+    MOV     PC,R14
+
+
+    END
+

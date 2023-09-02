@@ -1,0 +1,24 @@
+| Compile source code for PhotoDesk format handler
+
+Set Qoi2Spr$CompileDir <Obey$Dir>
+
+
+| To produce a listing add cmd line options: --list=<Qoi2Spr$CompileDir>.o.PhotoDesk_list --width=132 --length=0
+| and add "OPT 1+8192" to start of s.(PhotoDesk).!Handler (Turns on normal listing + turns off listing conditional directives)
+
+Echo Assembling PhotoDesk QOI Converter ...
+Echo
+IfThere <Qoi2Spr$CompileDir>.o.PD_Handler_obj Then Delete <Qoi2Spr$CompileDir>.o.PD_Handler_obj
+objasm --no_esc --no_warn -apcs=/32 <Qoi2Spr$CompileDir>.s.(PhotoDesk).!Handler -o <Qoi2Spr$CompileDir>.o.PD_Handler_obj
+
+IfThere <Qoi2Spr$CompileDir>.o.PD_Handler_obj Then Else Obey
+
+Echo
+Echo ... Linking ...
+link -bin <Qoi2Spr$CompileDir>.o.PD_Handler_obj -REMOVE -o <Qoi2Spr$CompileDir>.^.PhotoDesk.!3QOI.Handler
+
+IfThere <Qoi2Spr$CompileDir>.^.PhotoDesk.!3QOI.Handler Then Else Obey
+
+Echo ... Done
+SetType <Qoi2Spr$CompileDir>.^.PhotoDesk.!3QOI.Handler Utility
+Echo

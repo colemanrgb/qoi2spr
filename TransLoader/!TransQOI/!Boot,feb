@@ -1,0 +1,18 @@
+| QOI TransLoader
+| !Boot
+
+| TransLoader sprites
+IconSprites <Obey$Dir>.!Sprites
+
+| QOI filetype sprites
+If "<Boot$OSVersion>" < "400" Then Set Qoi2Spr$Sprites Sprites Else Set Qoi2Spr$Sprites 5Sprites
+If "<Qoi2Spr$Dir>" = "" Then IconSprites <Obey$Dir>.<Qoi2Spr$Sprites>
+Unset Qoi2Spr$Sprites
+
+| Sets up type and server variables for TransQOI
+Set File$Type_A61 QOI
+If "<Boot$OSVersion>" < "500" Then DOSMap QOI &A61
+
+Set TransQOI$Dir <Obey$Dir>
+Set TransQOI$Path <TransQOI$Dir>.
+Set FFGServer$TransQOI -T &A61 &FF9 -R TransQOI$Dir

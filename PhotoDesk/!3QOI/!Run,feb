@@ -1,0 +1,6 @@
+| PhotoDesk QOI format handler
+| !Run
+
+Set QOI$Dir <Obey$Dir>
+WimpSlot -min 64K -max 64K
+Run <Obey$Dir>.!RunImage %*0 QOI

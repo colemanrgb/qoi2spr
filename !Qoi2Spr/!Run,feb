@@ -1,0 +1,37 @@
+| Convert between QOI and Sprite images
+| !Run
+
+| To use Dynamic Areas instead of Wimpslot then add "-da <N>", where <N> is max size of Area in Mb, eg: -da 64
+
+RMEnsure UtilityModule 3.50 Error This application requires RISC OS 3.50 or later
+
+| Ensure we have a Scrap file
+If "<Wimp$ScrapDir>" = "" Then Error Please locate !Scrap
+
+Set Qoi2Spr$Dir <Obey$Dir>
+
+If "<Boot$OSVersion>" < "400" Then IconSprites <Qoi2Spr$Dir>.!Sprites Else IconSprites <Qoi2Spr$Dir>.5Sprites
+
+| Find our resources and set Qoi2Spr$Path
+Run <Qoi2Spr$Dir>.Resources.ResFinder Qoi2Spr
+
+| Set up Application Info Variables
+Obey Qoi2Spr:AppVars
+
+Set File$Type_A61 QOI
+Set Alias$@RunType_A61 Run <Qoi2Spr$Dir>.!Run %%*0
+If "<Boot$OSVersion>" < "500" Then DOSMap QOI &A61
+
+| Set up an alias to make it easy to use on the cmd line (No default options)
+Set Alias$Qoi2Spr Run <Qoi2Spr$Dir>.!RunImage %%*0
+
+| Uncomment the SetEval to set the maximum amount of memory for each cache (Can be up to 3 caches needed)
+| Minimum amount is 64Kb (64*1024)
+|SetEval Qoi2Spr$MaxCacheSize 100*1024*1024
+
+WimpSlot -min 192k -max 192k
+
+
+| Options: [-skip | -number] [-da <N>] [-mask1 | -mask8 | -alpha] [-clean] [-autoOpts] [-ex <N>] [-ey <N>] [-all] [-noExt]
+
+Run <Qoi2Spr$Dir>.!RunImage %*0 -autoOpts -all

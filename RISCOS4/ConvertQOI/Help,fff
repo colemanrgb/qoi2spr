@@ -1,0 +1,656 @@
+===============================================================================
+
+  ,ad8888ba,      ,ad8888ba,    88
+ d8"'    `"8b    d8"'    `"8b   88  ConvertQOI : Convert QOI files into Sprites
+d8'        `8b  d8'        `8b  88               and vice versa
+88          88  88          88  88
+        88  8P  Y8,        ,8P  88    Version  : 1.00 (27 Aug 2023)
+  aa     Y88P    Y8a.    .a8P   88               (C) Richard Coleman, 2023
+  `"Y8888Y"Y8a    `"Y8888Y"'    88
+
+
+           ConvertQOI is licensed under the terms of the MIT license
+
+===============================================================================
+
+ConvertQOI is an ImageFileConverter module for converting images in the new
+"QOI" format to RISC OS Sprite files, and vice versa.
+
+The QOI filetype (&A61) and application name "Qoi2Spr" have been allocated by
+ROOL.
+
+The Quite OK Image (QOI) format, invented by Dominic Szablewski, is designed for
+fast, lossless image compression. The specification (listed below), reference
+code and example images can be found at https://qoiformat.org/
+
+This application conforms to version 1.0 2022-01-05 of the QOI specification.
+
+
+INSTALLATION
+===============================================================================
+
+Copy the "ConvertQOI" directory into !Boot.Choices.Users.Single.Boot.PreDesk, or
+wherever is appropriate for your setup.
+
+Then either double-click on ConvertQOI.!Run or reboot.
+
+To set the filetype of a QOI file downloaded from the Internet or from a Windows
+PC, add the following to your Mimemap file:
+    image/x-qoi		QOI		a61	.qoi
+
+
+LIMITATIONS
+===============================================================================
+
+* There needs to be enough memory to hold both the QOI file and the Sprite file.
+
+* Sprite extension areas are ignored.
+
+* For Sprite Types 5 and above, any palette is ignored.
+
+* I have not come across any Type 8 Sprites so have been unable to test these.
+
+* For RISC OS 5 Sprites (Types 1-4) ImageFileViewer will give error "Mask or
+  palette operations not supported in this display depth" (You may need to
+  select "Scale to fit" to see the message) but you can still export as a QOI
+  and load it into !Paint, but you can't edit it.
+
+* For RISC OS 5 Sprites (Types 5-16) ImageFileViewer will display the message
+  "Sprite type is not supported by this version of the SpriteExtend module"
+  but you can still export as a QOI and load it into !Paint.
+
+
+Unsupported Sprite types
+-----------------------------
+The following Sprite types are not supported:
+  * Type 9 (JPEG), Types 11-14, and Types above 16.
+  * RISC OS 5 CMYK Sprites which are not Sprite Type 7 but have Mode flag bit 12
+    set, though Type 7 Sprites are supported and converted to RGB.
+  * Where the Sprite Mode word is a pointer to a Mode Selector Block.
+  * Compressed Sprites.
+
+
+HOW TO USE: Image File Viewer / !Paint
+===============================================================================
+
+Run ImageFileViewer and double-click on a QOI file or drag it to the
+ImageFileViewer window. It can also be dragged into !Paint.
+
+It can then be exported in same way as other filetypes.
+
+
+HOW TO USE: SWIs for converting QOI to Sprite
+===============================================================================
+
+There are two SWIs used when converting a QOI to a Sprite:
+   ImageFileConvert_MiscOp  (&56841)
+   which validates and retrieves information on the QOI file.
+and:
+   ImageFileConvert_Convert (&56840)
+   which is called twice, once to get the size of buffer for the Sprite and
+   then a second time to do the actual conversion.
+
+
+ImageFileConvert_MiscOp (&56841)
+---------------------------------
+=> R1 = &0A610FF9
+   R2 = pointer to QOI image data
+   R3 = length of QOI image data
+   R4 = &400
+
+On Exit (V clear):
+<= R0 = width of QOI image in pixels
+   R1 = height of QOI image in pixels
+   R2 = 32 (bits per pixel)
+   R3 = Image flags:
+          b0   = 0 (No palette)
+          b1   = 1 (Colour)
+          b2   = 1 if QOI has 4 channels, else = 0 if 3 channels
+          b3-5 = 0 (No interlace)
+   R4 = 90 (x DPI)
+   R5 = 90 (y DPI)
+   Other registers preserved
+
+On Exit (V set):
+<= R0 = Error code:
+          &81ACCC: "Unknown MiscOp operation" if R1 <> &0A610FF9 or R4 <> &400
+          &81ACCD: "ImageFile data is corrupt"
+   Other registers preserved
+
+Eg: QOI File is loaded into buffer at fileBuffer%
+    SYS "ImageFileConvert_MiscOp",0,&A610FF9,fileBuffer%,fileSize%,&400 TO width%,height%,bpp%,flags%,xdpi%,ydpi%
+
+
+ImageFileConvert_Convert (&56840)
+---------------------------------
+=> R0 = flags for operation:
+          b0     0 = Create a Sprite file, 1 = Create a Sprite
+          b16-19 mask size:
+                  0 = Select mask based on number of channels
+                      (4 channels = mask, 3 = no mask)
+                      RISC OS 4 and earlier uses a 1bpp mask, otherwise 8bpp
+                      alpha mask. Sets bit 22 if mask selected
+                  1 = 1bpp mask
+                  8 = 8bpp alpha mask
+                 15 = No mask
+          b20    1 = Use RISC OS 5 alpha channel, not mask (bits 16-19 must = 0)
+          b21    Reserved, must = 0
+          b22    1 = Remove unused mask. If all the mask bits are solid then the
+                     mask will be removed from the Sprite.
+                     If bit 20 is set (use RO5 alpha channel) then the alpha
+                     channel will only be created if the QOI file has 4 channels.
+                     If "select mask" specified (Bits 16-19 = 0) then this bit
+                     will be set if a mask is selected
+          b23    0 = use 90 DPI for X and Y
+                 1 = use DPI/eigen values in R7 and R8
+                     (invalid values in R7 and R8 use default of 90 DPI)
+   R1 = &0A610FF9
+   R2 = pointer to QOI image data
+   R3 = length of QOI image data
+   R4 = pointer to output Sprite buffer, or 0 to read size
+   R5 = size of output Sprite buffer, or 0 to read size
+   R6 = Unused
+   R7 = x DPI (180, 90, 45 or 22) or eigen value (0, 1, 2, 3)
+   R8 = y DPI                   = "" =
+        Invalid values in R7 or R8 use default of 90 DPI (eigen 1)
+   R9 = Sprite name to use (Defaults to "qoi") (ctrl terminated)
+
+On Exit (V clear):
+<= R5 = If R4 = 0 or R5 = 0 on entry then R5 = size of output buffer required
+        otherwise R5 = size of output buffer used (which may not be same as R5
+        on entry, eg if mask has been removed)
+   Other registers preserved
+
+On Exit (V set):
+<= R0 = Error code:
+          &81ACCA: "Not enough space in output buffer"
+          &81ACCB: "Bad flags set"
+          &81ACCD: "ImageFile data is corrupt"
+   Other registers preserved
+
+When creating a Sprite (R0 Bit 0 = 1) then the 16 byte Sprite Area is not
+included.
+
+When creating a Sprite File (R0 Bit 0 = 0) then the first Word of the Sprite
+Area is not included (Total size of Sprite area).
+So if just saving to file then save the buffer straight to the file.
+If you want to use any OS_SpriteOps then you will need to add this first Word
+and set it to the Total size of Sprite area (returned in R5).
+
+
+Example code
+---------------------------------
+The example code here is just for demonstration and contains minimal error
+checking.
+
+
+Convert QOI file to Sprite.
+
+ 10 REM Load QOI file:
+ 20 inputFile$ = "@.QOI_File/qoi"
+ 30 SYS "OS_File",23,inputFile$ TO obj%,,,,fsize%,,ftype%
+ 40 IF obj% <> 1 THEN PRINT "ERROR: Not a file!" : END
+ 50 IF ftype% <> &A61 THEN PRINT "ERROR: Not a QOI file!" : END
+ 60 DIM qoiBuffer% fsize%
+ 70 f% = OPENIN(inputFile$)
+ 80 IF f% = 0 THEN PRINT "ERROR: Can't open file!" : END
+ 90 SYS "XOS_GBPB",4,f%,qoiBuffer%,fsize% TO ,,,err%
+100 CLOSE#f% : f% = 0
+110 IF err% <> 0 THEN PRINT "ERROR: Unable to read whole file!" : END
+120
+130 REM Find out the size of buffer required for the Sprite:
+140 SYS "ImageFileConvert_Convert",0,&0A610FF9,qoiBuffer%,fsize%,0,0 TO ,,,,,sprBufSize%
+150 DIM sprBuffer% sprBufSize%
+160
+170 REM Convert QOI to a Sprite file: (auto-select Mask/Alpha and 90dpi)
+180 SYS "ImageFileConvert_Convert",0,&0A610FF9,qoiBuffer%,fsize%,sprBuffer%,sprBufSize% TO ,,,,,sprBufUsed%
+190
+200 REM Save the Sprite:
+210 SYS "OS_File",10,"@.SpriteFile",&FF9,,sprBuffer%,sprBuffer%+sprBufUsed%
+
+----------------
+
+To use OS_SpriteOp SWIs on the Sprite you will need to add a Word to the Sprite
+filesize for the Sprite Area Header.
+
+ 10 REM Load QOI file:
+ 20 inputFile$ = "@.QOI_File/qoi"
+ 30 SYS "OS_File",23,inputFile$ TO obj%,,,,fsize%,,ftype%
+ 40 IF obj% <> 1 THEN PRINT "ERROR: Not a file!" : END
+ 50 IF ftype% <> &A61 THEN PRINT "ERROR: Not a QOI file!" : END
+ 60 DIM qoiBuffer% fsize%
+ 70 f% = OPENIN(inputFile$)
+ 80 IF f% = 0 THEN PRINT "ERROR: Can't open file!" : END
+ 90 SYS "XOS_GBPB",4,f%,qoiBuffer%,fsize% TO ,,,err%
+100 CLOSE#f% : f% = 0
+110 IF err% <> 0 THEN PRINT "ERROR: Unable to read whole file!" : END
+120
+130 REM Find out the size of buffer required for the Sprite:
+140 SYS "ImageFileConvert_Convert",0,&0A610FF9,qoiBuffer%,fsize%,0,0 TO ,,,,,sprBufSize%
+150 DIM sprBuffer% sprBufSize% + 4 : REM Add a Word for Total size of Sprite area
+160
+170 REM Convert QOI to a Sprite file: (auto-select Mask/Alpha and 90dpi)
+180 SYS "ImageFileConvert_Convert",0,&0A610FF9,qoiBuffer%,fsize%,sprBuffer% + 4,sprBufSize%,0,0,0,"mySprite" TO ,,,,,sprBufUsed%
+190 !sprBuffer% = sprBufUsed% + 4 : REM Set Total size of Sprite area
+200
+210 REM Verify Sprite:
+220 SYS "OS_SpriteOp",17+256,sprBuffer%
+230
+240 REM Read Sprite details:
+250 SYS "OS_SpriteOp",8+256,sprBuffer% TO ,,sprSize%,numSpr%,firstSprOffset%,sprFreeOffset%
+260
+270 REM Save Sprite:
+280 SYS "OS_SpriteOp",12+256,sprBuffer%,"@.SpriteFile"
+
+
+
+HOW TO USE: SWI for converting Sprite to QOI
+===============================================================================
+
+There is only one SWI used when converting a Sprite to a QOI:
+   ImageFileConvert_Convert (&56840)
+   which is called twice, once to get the size of buffer for the QOI and then a
+   second time to do the actual conversion.
+
+
+ImageFileConvert_Convert (&56840)
+---------------------------------
+=> R0 = flags for operation:
+          b16    0 = Convert first Sprite to QOI, R7 is ignored
+                 1 = Convert the Sprite specified in R7 (either number or name)
+          b17-23 = 0
+   R1 = &0FF90A61
+   R2 = pointer to Sprite data (Includes Sprite Area Header without the first
+        word: Total Size of Area)
+   R3 = length of Sprite data
+   R4 = pointer to output QOI buffer, or 0 to read size
+   R5 = size of output QOI buffer, or 0 to read size
+   R6 = Unused
+   R7 = If R7 <= &8000 then R7 is taken to be a Sprite number to convert (first
+        Sprite = 1):
+           If R7 = 0 then R7 will default to the first Sprite
+           If R7 > Number of Sprites then returns error "Sprite not found"
+        If R7 > &8000 then R7 is taken to be a pointer to the Sprite name
+        terminated by a ctrl character:
+           If R7 is not a valid address then returns error "Sprite not found"
+           If the Sprite name is not found then returns error "Sprite not found"
+           Spaces in the name are changed to the non-breaking space character
+
+On Exit (V clear):
+<= R5 = If R4 = 0 or R5 = 0 on entry then R5 = size of output buffer required
+        otherwise R5 = size of output buffer used
+   R7 = Pointer to name of Sprite (0 terminated)
+        Spaces use the non-breaking character, ASCII code 160
+   Other registers preserved
+
+On Exit (V set):
+<= R0 = Error code:
+          255    : "Sprite not found"
+          254    : "Invalid Sprite Mode"
+          253    : "Sprite type is not supported"
+          &81ACCA: "Not enough space in output buffer"
+          &81ACCD: "ImageFile data is corrupt"
+   Other registers preserved
+
+DPI in Sprite is ignored.
+
+A Sprite File does not contain the first Word of the Sprite Area (Total size of
+Sprite area).
+So if just converting to QOI then load the file straight into the buffer.
+If you want to use any OS_SpriteOps then you will need to add this first Word
+and set it to the Total size of Sprite area (= file size).
+
+To avoid calling this twice can try allocating enough memory for worst case
+scenario:
+   buffer_size = (Sprite width * Sprite height * (channels+1)) + 22
+                 If Sprite type is 7 (CMYK) or Sprite has a mask or alpha
+                 channel then use channels = 4 otherwise use channels = 3
+
+
+Example code
+---------------------------------
+The example code here is just for demonstration and contains minimal error
+checking.
+
+
+Convert first Sprite to a QOI file.
+
+ 10 REM Load Sprite file:
+ 20 inputFile$ = "@.SpriteFile"
+ 30 SYS "OS_File",23,inputFile$ TO obj%,,,,fsize%,,ftype%
+ 40 IF obj% <> 1 THEN PRINT "ERROR: Not a file!" : END
+ 50 IF ftype% <> &FF9 THEN PRINT "ERROR: Not a Sprite file!" : END
+ 60 DIM sprBuffer% fsize%
+ 70 f% = OPENIN(inputFile$)
+ 80 IF f% = 0 THEN PRINT "ERROR: Can't open file!" : END
+ 90 SYS "XOS_GBPB",4,f%,sprBuffer%,fsize% TO ,,,err%
+100 CLOSE#f% : f% = 0
+110 IF err% <> 0 THEN PRINT "ERROR: Unable to read whole file!" : END
+120
+130 REM Find out the size of buffer required for converting the first Sprite to QOI:
+140 SYS "ImageFileConvert_Convert",0,&0FF90A61,sprBuffer%,fsize%,0,0 TO ,,,,,qoiBufSize%
+150 DIM qoiBuffer% qoiBufSize%
+160
+170 REM Convert first Sprite to QOI:
+180 SYS "ImageFileConvert_Convert",0,&0FF90A61,sprBuffer%,fsize%,qoiBuffer%,qoiBufSize% TO ,,,,,qoiBufUsed%
+190
+200 REM Save the QOI:
+210 SYS "OS_File",10,"@.QOI_File/qoi",&A61,,qoiBuffer%,qoiBuffer%+qoiBufUsed%
+
+----------------
+
+Convert a named Sprite to a QOI.
+
+ 10 REM Load Sprite file:
+ 20 inputFile$ = "@.SpriteFile"
+ 30 SYS "OS_File",23,inputFile$ TO obj%,,,,fsize%,,ftype%
+ 40 IF obj% <> 1 THEN PRINT "ERROR: Not a file!" : END
+ 50 IF ftype% <> &FF9 THEN PRINT "ERROR: Not a Sprite file!" : END
+ 60 DIM sprBuffer% fsize%
+ 70 f% = OPENIN(inputFile$)
+ 80 IF f% = 0 THEN PRINT "ERROR: Can't open file!" : END
+ 90 SYS "XOS_GBPB",4,f%,sprBuffer%,fsize% TO ,,,err%
+100 CLOSE#f% : f% = 0
+110 IF err% <> 0 THEN PRINT "ERROR: Unable to read whole file!" : END
+120
+130 REM Find out the size of buffer required for converting Sprite named "screen" to QOI:
+140 SYS "ImageFileConvert_Convert",1<<16,&0FF90A61,sprBuffer%,fsize%,0,0,0,"screen" TO ,,,,,qoiBufSize%
+150 DIM qoiBuffer% qoiBufSize%
+160
+170 REM Convert Sprite name "screen" to QOI:
+180 SYS "ImageFileConvert_Convert",1<<16,&0FF90A61,sprBuffer%,fsize%,qoiBuffer%,qoiBufSize%,0,"screen" TO ,,,,,qoiBufUsed%
+190
+200 REM Save the QOI:
+210 SYS "OS_File",10,"@.QOI_File/qoi",&A61,,qoiBuffer%,qoiBuffer%+qoiBufUsed%
+
+----------------
+
+To use OS_SpriteOp SWIs on the Sprite you will need to add 4 bytes to the Sprite
+filesize for the Sprite Area Header.
+But do not include this first word in the buffer that is passed to
+ImageFileConvert_Convert.
+This will only work for Sprites that the version of RISC OS it is running on
+recognises.
+
+ 10 REM Load Sprite file:
+ 20 inputFile$ = "@.SpriteFile"
+ 30 SYS "OS_File",23,inputFile$ TO obj%,,,,fsize%,,ftype%
+ 40 IF obj% <> 1 THEN PRINT "ERROR: Not a file!" : END
+ 50 IF ftype% <> &FF9 THEN PRINT "ERROR: Not a Sprite file!" : END
+ 60 DIM sprBuffer% fsize% + 4
+ 70 f% = OPENIN(inputFile$)
+ 80 IF f% = 0 THEN PRINT "ERROR: Can't open file!" : END
+ 90 SYS "XOS_GBPB",4,f%,sprBuffer% + 4,fsize% TO ,,,err%
+100 CLOSE#f% : f% = 0
+110 IF err% <> 0 THEN PRINT "ERROR: Unable to read whole file!" : END
+120 !sprBuffer% = fsize% + 4
+130
+140 REM Calculate worst case scenario for Sprite 4:
+150
+160 SYS "XOS_SpriteOp",8+512,sprBuffer% TO ,,,numSprites%;V%
+170 IF (V% AND 1) = 1 THEN numSprites% = 0
+180 IF numSprites% < 4 THEN PRINT "ERROR: Sprite 4 does not exist!" : END
+190 SYS "XOS_SpriteOp",13+256,sprBuffer%,STRING$(255,CHR$(0)),256,4 TO ,,sprName$;V%
+200 IF (V% AND 1) = 1 THEN PRINT "ERROR: Sprite 4 is not of a recognised type" : END
+210 SYS "OS_SpriteOp",40+256,sprBuffer%,sprName$ TO ,,,width%,height%,mask%,mode%
+220 IF mask% = 0 THEN channels% = 3 ELSE channels% = 4
+230 qoiSize% = (width% * height% * (channels% + 1)) + 22
+240 DIM qoiBuffer% qoiSize%
+250
+260 REM Convert Sprite 4 to QOI:
+270 SYS "ImageFileConvert_Convert",1<<16,&0FF90A61,sprBuffer% + 4,fsize%,qoiBuffer%,qoiSize%,0,4 TO ,,,,,qoiBufUsed%,,sprName$
+280
+290 REM Save the QOI:
+300 SYS "OS_File",10,"@."+sprName$+"/qoi",&A61,,qoiBuffer%,qoiBuffer%+qoiBufUsed%
+
+----------------
+
+Converting all Sprites in the file.
+
+ 10 REM Load Sprite file:
+ 20 inputFile$ = "@.SpriteFile"
+ 30 SYS "OS_File",23,inputFile$ TO obj%,,,,fsize%,,ftype%
+ 40 IF obj% <> 1 THEN PRINT "ERROR: Not a file!" : END
+ 50 IF ftype% <> &FF9 THEN PRINT "ERROR: Not a Sprite file!" : END
+ 60 DIM sprBuffer% fsize% + 4
+ 70 f% = OPENIN(inputFile$)
+ 80 IF f% = 0 THEN PRINT "ERROR: Can't open file!" : END
+ 90 SYS "XOS_GBPB",4,f%,sprBuffer% + 4,fsize% TO ,,,err%
+100 CLOSE#f% : f% = 0
+110 IF err% <> 0 THEN PRINT "ERROR: Unable to read whole file!" : END
+120 !sprBuffer% = fsize% + 4
+130
+140 SYS "XOS_SpriteOp",8+512,sprBuffer% TO ,,,numSprites%;V%
+150 IF (V% AND 1) = 1 THEN PRINT "ERROR: No Sprites!" : END
+160
+170 REM Find the largest Sprite:
+180 qoiBufSize% = 0
+190 FOR i% = 1 TO numSprites%
+200   SYS "ImageFileConvert_Convert",1<<16,&0FF90A61,sprBuffer% + 4,fsize%,0,0,0,i% TO ,,,,,qoiBufUsed%
+210   IF qoiBufUsed% > qoiBufSize% THEN qoiBufSize% = qoiBufUsed%
+220 NEXT
+230 DIM qoiBuffer% qoiBufSize%
+240
+250 REM Create directory to hold the QOI files
+260 SYS "OS_File",8,"@.QOI_Files"
+270
+280 REM And then convert them:
+290 FOR i% = 1 TO numSprites%
+300   SYS "ImageFileConvert_Convert",1<<16,&0FF90A61,sprBuffer% + 4,fsize%,qoiBuffer%,qoiBufSize%,0,i% TO ,,,,,qoiBufUsed%,,sprName$
+310   SYS "OS_File",10,"@.QOI_Files."+sprName$+"/qoi",&A61,,qoiBuffer%,qoiBuffer%+qoiBufUsed%
+320 NEXT
+
+
+QOI SPECIFICATION                                        Version 1.0 2022-01-05
+===============================================================================
+
+The QOI Specification fits on a single A4 sheet, and is available to download as
+a PDF from https://qoiformat.org/qoi-specification.pdf, and is reproduced here.
+
+
+A QOI file consists of a 14-byte header, followed by any number of data "chunks"
+and an 8-byte end marker.
+
+qoi_header {
+  char      magic[4];    // magic bytes "qoif"
+  uint32_t  width;       // image width in pixels (Big Endian)
+  uint32_t  height;      // image height in pixels (Big Endian)
+  uint8_t   channels;    // 3 = RGB, 4 = RGBA
+  uint8_t   colourspace; // 0 = sRGB with linear alpha, 1 = all channels linear
+};
+
+The colourspace and channel fields are purely informative. They do not change
+the way data chunks are encoded.
+
+Images are encoded row by row, left to right, top to bottom. The decoder and
+encoder start with {r: 0, g: 0, b: 0, a: 255} as the previous pixel value. An
+image is complete when all pixels specified by width * height have been covered.
+Pixels are encoded as:
+    * a run of the previous pixel
+    * an index into an array of previously seen pixels
+    * a difference to the previous pixel value in r,g,b
+    * full r,g,b or r,g,b,a values
+
+The colour channels are assumed to not be premultiplied with the alpha channel
+("un-premultiplied alpha").
+
+A running array[64] (zero-initialized) of previously seen pixel values is
+maintained by the encoder and decoder. Each pixel that is seen by the encoder
+and decoder is put into this array at the position formed by a hash function of
+the colour value. In the encoder, if the pixel value at the index matches the
+current pixel, this index position is written to the stream as QOI_OP_INDEX.
+
+The hash function for the index is:
+    index_position = (r * 3 + g * 5 + b* 7 + a * 11) % 64
+
+Each chunk starts with a 2-bit or 8-bit tag, followed by a number of data bits.
+The bit length of chunks is divisible by 8: ie all chunks are byte aligned.
+All values encoded in these data bits have the most significant bit on the left.
+The 8-bit tags have precedence over the 2-bit tags. A decoder must check for the
+presence of an 8-bit tag first.
+
+The byte stream's end is marked with seven "00" bytes followed by a single "01"
+byte.
+
+The possible chunks are:
+
+:-- QOI_OP_RGB --------------------:------------:------------:------------:
+:              Byte[0]             :   Byte[1]  :   Byte[2]  :   Byte[3]  :
+:   7   6   5   4   3   2   1   0  :   7 ... 0  :   7 ... 0  :   7 ... 0  :
+:----------------------------------+------------+------------+------------:
+:   1   1   1   1   1   1   1   0  :     red    :    green   :    blue    :
+:----------------------------------:------------:------------:------------:
+
+8-bit tag: b11111110
+8-bit   red channel value
+8-bit green channel value
+8-bit  blue channel value
+
+The alpha value remains unchanged from the previous pixel.
+
+
+
+:-- QOI_OP_RGBA -------------------:------------:------------:------------:------------:
+:              Byte[0]             :   Byte[1]  :   Byte[2]  :   Byte[3]  :   Byte[4]  :
+:   7   6   5   4   3   2   1   0  :   7 ... 0  :   7 ... 0  :   7 ... 0  :   7 ... 0  :
+:----------------------------------+------------+------------+------------+------------:
+:   1   1   1   1   1   1   1   1  :     red    :    green   :    blue    :    alpha   :
+:----------------------------------:------------:------------:------------:------------:
+
+8-bit tag: b11111111
+8-bit   red channel value
+8-bit green channel value
+8-bit  blue channel value
+8-bit alpha channel value
+
+
+
+:-- QOI_OP_INDEX ------------------:
+:              Byte[0]             :
+:   7   6   5   4   3   2   1   0  :
+:---------+------------------------:
+:   0   0 :          index         :
+:---------:------------------------:
+
+2-bit tag: b00
+6-bit index into the colour index array: 0..63
+
+A valid encoder must not issue 2 or more consecutive QOI_OP_INDEX chunks to the
+same index. QOI_OP_RUN should be used instead.
+
+
+
+:-- QOI_OP_DIFF -------------------:
+:              Byte[0]             :
+:   7   6   5   4   3   2   1   0  :
+:---------+-------+-------+--------:
+:   0   1 :   dr  :   dg  :   db   :
+:---------:-------:-------:--------:
+
+2-bit tag: b01
+2-bit   red channel difference from the previous pixel -2..1
+2-bit green channel difference from the previous pixel -2..1
+2-bit  blue channel difference from the previous pixel -2..1
+
+The difference to the current channel values are using a wraparound operation,
+so 1 - 2 will result in 255, while 255 + 1 will result in 0.
+
+Values are stored as unsigned integers with a bias of +2. Eg -2 is stored as 0
+(b00), 1 is stored as 3 (b11).
+
+The alpha value remains unchanged from the previous pixel.
+
+
+
+:-- QOI_OP_LUMA -------------------:----------------------------------:
+:              Byte[0]             :              Byte[1]             :
+:   7   6   5   4   3   2   1   0  :   7   6   5   4   3   2   1   0  :
+:-------- +------------------------:-----------------+----------------:
+:   1  0  :     diff green         :     dr - dg     :    db - dg     :
+:---------:------------------------:-----------------:----------------:
+
+2-bit tag: b10
+6-bit green channel difference from the previous pixel -32..31
+4-bit   red channel difference minus green channel difference -8..7
+4-bit  blue channel difference minus green channel difference -8..7
+
+The green channel is used to indicate the general direction of change and is
+encoded in 6 bits. The red and blue channels (dr and db) base their diffs off
+of the green channel difference, ie:
+
+    dr_dg = (cur_px.r - prev_px.r) - (cur_px.g - prev_px.g)
+    db_dg = (cur_px.b - prev_px.b) - (cur_px.g - prev_px.g)
+
+The difference to the current channel values are using a wraparound operation,
+so 10 - 13 will result in 253, while 250 + 7 will result in 1.
+
+Values are stored as unsigned integers with a bias of +32 for the green channel
+and a bias of +8 for the red and blue channels.
+
+The alpha value remains unchanged from the previous pixel.
+
+
+
+:-- QOI_OP_RUN --------------------:
+:              Byte[0]             :
+:   7   6   5   4   3   2   1   0  :
+:---------+------------------------:
+:   1   1 :          run           :
+:---------:------------------------:
+
+2-bit tag: b11
+6-bit run-length repeating the previous pixel: 1..62
+
+The run-length is stored with a bias of -1. Note that the run-lengths 63 and 64
+(b11111110 and b11111111) are illegal as they are occupied by the QOI_OP_RGB and
+QOI_OP_RGBA tags.
+
+
+ACKNOWLEDGMENTS
+===============================================================================
+
+With thanks to Chris Bazley and his Star Fighter 3000 Image File Converter which
+was a great help in creating this ConvertQOI module.
+
+The hardest part of this project was working out how to process the variety of
+Sprite types, especially types 0 to 4, whereas the actual conversion into the
+QOI format was very easy and straightforward.
+
+Thanks are due to Gerald Holdsworth for his info on Sprites and Lazarus source
+code (https://www.geraldholdsworth.co.uk), as well as the Lib RO Sprite source
+code (https://source.netsurf-browser.org/libroSprite.git/), which have both been
+a great source of help in developing this application.
+
+
+SUPPORT
+===============================================================================
+
+For support queries or any other help with this software, please contact:
+    coleman@orpheusmail.co.uk
+
+
+LICENSE
+===============================================================================
+
+Copyright (c) 2023 Richard Coleman
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+===============================================================================
+

@@ -1,0 +1,423 @@
+; Load QOI file as a 24bpp Sprite (Type 6)
+;==================================================================================================
+
+
+err_escLoad
+    DCD     17                            ; 17 = Lookup token in Messages file
+    DCB     "Esc", 0
+    ALIGN
+
+
+do_Qoi2Spr    FunctionSig                 ; Conversion routine QOI -> Sprite
+
+; On Entry:
+;  R3  = Width
+;  R4  = Image size
+;  R0/R6  = Height
+;  R12 = Pointer to workspace
+
+
+    MOV     R8,R4                         ; Need image size in R8
+
+    ; Calculate hourglass values (Divide Sprite height (in R0) by 100)
+    ; also enables Escape key if not creating a RISC OS 4 Module
+    ; and zero the Index array and insert starting pixel value into Index array
+    BL      init_hourglass                ; [in s.Hourglass_Index]
+
+
+;--------------------------- Process QOI chunks into Sprite pixels ----------------------;
+
+; Process Sprite lines - read QOI data and store in sprite
+; loop until all lines written - checking how much data reqd/used
+
+; R3 = width, R6 = height, R8 = image size
+
+; Need to preserve: R8 = size of image
+
+
+    LDR     R10,[R12,#spr_DataAddr]       ; R10 = Address of Sprite data
+    LDR     R4,[R12,#spr_fhandle]         ; R4  = Sprite file handle
+
+load_spr_block                            ; Process a block of lines
+
+; Process QOI chunks until we have done R6 lines of Sprite data
+; R3  = Number of pixels in a line (=width)
+; R4  = Sprite file handle
+; R5  = Number of pixels left to process in the line (=width) [Decrementing]
+; R6  = Number of Sprite lines to fill (height)
+; R8  = image size
+; R10 = Address where to store sprite pixel
+; R12 = PhotoDesk workspace
+
+    MOV     R5,R3                         ; Number of Sprite pixels in this line (width)
+
+load_spr_line                             ; Process a line
+
+; Process QOI chunks until we have done a line of Sprite data
+; R0  = Sprite pixel in &AABBGGRR format
+; R1  = If non-zero then processing a Run chunk
+; R3  = Number of pixels in a line (=width)
+; R4  = Sprite file handle
+; R5  = Number of pixels left to process in the line (=width) [Decrementing]
+; R6  = Number of Sprite lines to fill (height)
+; R8  = image size
+; R10 = Address where to store sprite pixel
+; R12 = PhotoDesk workspace
+
+
+    BL      qoi2spr                       ; [in s.qoi2spr]
+
+
+    ; On exit: R0 = Sprite pixel or Error block, R1 = -1, 0, 1..61
+    ; If R1 = -1 then error from qoi2spr
+    CMN     R1,#1                         ; -1
+    BEQ     App_Qoi2Spr_Exit              ; and exit, R0 = Ptr to error block
+
+    MOV     R9,R0                         ; Preserve sprite pixel value (R0) before it gets altered by writeMask
+                                          ; in case we need it for a Run chunk
+    BL      writeMask                     ; [in s.WriteMask]
+
+
+    ; Store pixel in R0 ... (We know buffer is large enough for at least 1 Sprite line)
+    STR     R0,[R10],#4
+
+    SUBS    R5,R5,#1
+
+    ; Optmised routine to process Run chunks
+    ; If in a run then don't call qoi2spr just use same R0 value
+
+    BEQ     %FT79                         ; Finshed this line, go and see if more lines to do
+
+    ; More of this line to do, so see if Run (R1<>0) then process a Run chunk else (R1=0) go get next chunk
+    CMP     R1,#0
+    BEQ     load_spr_line                 ; Go get next chunk from QOI file
+
+    ; Process a Run chunk. R1 = Number of pixels to write to this line
+    CMP     R1,R5                         ; If R1 > R5 then just do R5 pixels to finish the line else can do R1 pixels
+    MOVHI   R1,R5
+
+    LDR     R2,[R12,#qoi_RunCount]
+    SUB     R2,R2,R1                      ; Update Run count in qoiDataBlock
+    STR     R2,[R12,#qoi_RunCount]
+    SUB     R5,R5,R1                      ; Update number of pixels left in this line
+71
+
+    MOV     R0,R9                         ; Get original sprite pixel value
+    BL      writeMask                     ; [in s.WriteMask]
+
+    ; Store pixel in R0 ... (We know buffer is large enough)
+    STR     R0,[R10],#4
+
+    SUBS    R1,R1,#1
+    BNE     %BT71                         ; Go store next Run pixel
+
+    ; Done R1 pixels
+    ; We might have processed all the Run, or come to the end of the line with more Run to process, or both!
+
+    CMP     R5,#0
+    BNE     load_spr_line                 ; Not finished with this line, so go get next chunk from QOI file
+
+    ; Finshed this line, go and see if more lines to do
+79
+
+
+;--------------------------- Another line complete ---------------------------;
+
+
+; Check if Sprite cache is full or can we fit another line in
+
+; R1  = If non-zero then processing a Run chunk
+; R3  = Number of pixels in a line (=width)
+; R4  = Sprite file handle
+; R6  = Number of Sprite lines to fill (height)
+; R8  = image size
+; R10 = Address where to store sprite pixel
+; R12 = PhotoDesk workspace
+
+
+    LDR     R9,[R12,#mask_Flags]
+    AND     R9,R9,#&0F                    ; R9 = mask_bpp in bits 0-3 (=0,1,8)
+
+    CMP     R4,#0
+    BEQ     %FT80                         ; Sprite all in memory so don't need to flush cache
+
+    ; Update amount of mask cache
+    CMP     R9,#1
+    MOVHI   R5,R3,LSL#3                   ; R5 = width * 8
+    MOVEQ   R5,R3                         ; R5 = width * 1
+
+    ; 1bpp or 8bpp mask
+    LDRHS   R0,[R12,#mask_CacheLines]
+    ; Increment Amount of Mask cache += (((width * mask_bpp) + 31) AND (NOT(31))) DIV 8
+    ADDHS   R5,R5,#31
+    MVNHS   R2,#31                        ; R2 = NOT(31)
+    ANDHS   R5,R5,R2
+    ADDHS   R11,R0,R5,LSR#3               ; R11 = R0 + (R5 DIV 8)
+    STRHS   R11,[R12,#mask_CacheLines]
+
+    ; Update amount of Sprite cache
+    LDR     R0,[R12,#spr_CacheLines]
+    LDR     R5,[R12,#spr_CacheFree]
+    ADD     R0,R0,R3,LSL#2                ; Amount of Sprite cache += width * 4
+    SUB     R2,R5,R3,LSL#2                ; Amount of space left in Sprite cache -= width * 4
+    STR     R0,[R12,#spr_CacheLines]
+    STR     R2,[R12,#spr_CacheFree]
+
+    ; Do we have space for another Sprite line?
+    CMP     R2,R3,LSL#2                   ; Is amount of space left in Sprite cache < (width * 4)
+    BHS     %FT80                         ; No, we have enough for another line
+
+    ; Flush caches (R9 = Mask bpp 0,1,8)
+
+    ; Preserve registers: R1, R3
+    MOV     R5,R1                         ; Run
+    MOV     R7,R3                         ; width
+
+    ; Flush Sprite cache
+    MOV     R3,R0                         ; R0 = Amount of Sprite cache to write
+    MOV     R1,R4                         ; Sprite file handle
+    LDR     R2,[R12,#spr_CacheAddr]       ; Start of Sprite cache
+    STR     R2,[R12,#spr_DataAddr]        ; Reset where to write next Sprite word
+    MOV     R10,R2                        ; R10 = Address where to store sprite pixel
+    LDR     R4,[R12,#spr_fptr]            ; File ptr
+    MOV     R0,#1
+    SWI     XOS_GBPB
+    BVS     App_Qoi2Spr_Exit              ; App_Error
+
+    STR     R4,[R12,#spr_fptr]            ; Update file ptr
+    ; Reset Sprite cache details
+    MOV     R0,#0
+    STR     R0,[R12,#spr_CacheLines]      ; Amount of Sprite cache = 0
+    LDR     R0,[R12,#cache_size]          ; Get size of file caches
+    STR     R0,[R12,#spr_CacheFree]       ; Amount of space left in Sprite cache = Size of file cache
+
+    CMP     R9,#0
+    BEQ     %FT79                         ; No mask
+
+    ; Flush Mask cache
+    MOV     R3,R11                        ; R11 = Amount of Mask cache to write
+    LDR     R2,[R12,#mask_CacheAddr]      ; Start of Mask cache
+    STR     R2,[R12,#mask_DataAddr]       ; Reset where to write next Mask word
+    MOV     R11,R2
+    LDR     R4,[R12,#mask_fptr]           ; File ptr
+    MOV     R0,#1
+    SWI     XOS_GBPB
+    BVS     App_Qoi2Spr_Exit              ; App_Error
+
+    STR     R4,[R12,#mask_fptr]           ; Update file ptr
+    ; Reset Mask cache details
+    MOV     R0,#0
+    STR     R0,[R12,#mask_CacheLines]     ; Amount of Mask cache = 0
+    STR     R0,[R12,#mask_x]              ; Where we are in the current mask word
+    MOV     R0,#-1                        ; Set mask_current_word = &FFFFFFFF
+    STR     R0,[R12,#mask_CurrentWord]    ; maskDataBlock%!4
+    STR     R0,[R11]                      ; Store mask_current_word at maskData
+
+79
+    ; Restore registers: R1, R3
+    MOV     R4,R1                         ; Sprite file handle
+    MOV     R1,R5                         ; Run
+    MOV     R3,R7                         ; width
+80
+
+    ; Set mask_x so it's ready for the next line
+    CMP     R9,#0
+    BEQ     %FT81                         ; No mask
+
+    ; We have a mask ...
+    LDR     R0,[R12,#mask_x]
+    CMP     R0,#0                         ; Is mask_x = 0?
+    MOVNE   R0,#32                        ; no, so point mask_x to end of mask word to skip end of row padding
+    STRNE   R0,[R12,#mask_x]
+
+81
+
+    ; Check for Escape key
+
+    ; In WIMP, the Escape key is disabled and so OS_ReadEscapeState always returns with C clear
+    ; which is why we enable Escape key with OS_Byte 229,0 at the start
+    SWI     OS_ReadEscapeState            ; C is set if Escape has been pressed
+    ADRCSL  R0,err_escLoad
+    BCS     App_Qoi2Spr_Exit
+
+    ; and update Hourglass
+
+    LDR     R0,[R12,#hg_onepcentcount]    ; The current 1% row count (Decreasing)
+    SUBS    R5,R0,#1                      ; Done another row
+    STRNE   R5,[R12,#hg_onepcentcount]    ; Current 1% row count not reached 0
+    ; Once reach 0 reset the 1% row count and increment the Percentage display
+    LDREQ   R0,[R12,#hg_pcent]            ; Percent value to show (0..99)
+    LDREQ   R5,[R12,#hg_onepcent]         ; Number of rows that represents 1%
+    ADDEQ   R0,R0,#1                      ; Next %
+    STREQ   R0,[R12,#hg_pcent]
+    STREQ   R5,[R12,#hg_onepcentcount]    ; Reset current 1% row count
+    SWIEQ   XHourglass_Percentage
+
+
+    ; Done all lines yet?
+    SUBS    R6,R6,#1
+    BHI     load_spr_block                ; Process next line
+
+
+;--------------------------- All done, so exit ---------------------------;
+
+    MOVS    R1,R4                         ; R1 = Sprite file handle
+    BEQ     %FT90                         ; Sprite all in memory (R1=0) so don't need to flush cache
+                                          ; We save the whole file when we exit back to !Qoi2Spr
+
+    ; Flush caches (R9 = Mask bpp 0,1,8)
+
+    LDR     R3,[R12,#spr_CacheLines]      ; Amount of Sprite cache to write
+    CMP     R3,#0
+    BEQ     %FT90                         ; Cache is empty
+
+    ; Flush Sprite cache
+    LDR     R2,[R12,#spr_CacheAddr]       ; Start of Sprite cache
+    LDR     R4,[R12,#spr_fptr]            ; File ptr
+    MOV     R0,#1
+    SWI     XOS_GBPB
+    BVS     App_Qoi2Spr_Exit
+
+    CMP     R9,#0
+    BEQ     %FT90                         ; No mask
+
+    ; Flush Mask cache
+    LDR     R2,[R12,#mask_CacheAddr]      ; Start of Mask cache
+    LDR     R3,[R12,#mask_CacheLines]     ; Amount of Mask cache to write
+    LDR     R4,[R12,#mask_fptr]           ; File ptr
+    MOV     R0,#1
+    SWI     XOS_GBPB
+    BVS     App_Qoi2Spr_Exit
+
+90
+    ; See if we need to remove solid mask
+    LDR     R0,[R12,#mask_RemoveIt]       ; Is maskDataBlock%!24 = -1?
+    CMN     R0,#1                         ; Will = 0 if not to remove mask
+    BNE     %FT96                         ; Not -1, so leave it be
+    ; Yes, so we remove mask as all bits are solid
+
+    CMP     R1,#0
+    BEQ     %FT94                         ; Sprite file all in memory so amend memory direct
+
+    ; otherwise update header in file (Doesn't include size of file word (sprBuffer%!0))
+    MOV     R0,#3
+    ADD     R8,R8,#16+44                  ; R8 = size of Sprite Image data, so need to include Sprite header
+    SUB     R2,R8,#4                      ; But doesn't include first word of header
+    SWI     XOS_Args                      ; Truncate file to remove mask
+
+    MOVVC   R0,#1
+    MOVVC   R2,#12-4
+    SWIVC   XOS_Args                      ; Set Sprite file ptr to Offset to 1st free word
+
+    MOVVC   R0,R8                         ; Write Offset to end of sprites (sprBuffer%!12 Offset to 1st free word)
+    SWIVC   XOS_BPut
+    MOVVC   R0,R0,LSR#8
+    SWIVC   XOS_BPut
+    MOVVC   R0,R0,LSR#8
+    SWIVC   XOS_BPut
+    MOVVC   R0,R0,LSR#8
+    SWIVC   XOS_BPut
+
+    SUBVC   R0,R8,#16                     ; Write Offset to next sprite from this sprite = file size - size of file header (16)
+    SWIVC   XOS_BPut
+    MOVVC   R0,R0,LSR#8
+    SWIVC   XOS_BPut
+    MOVVC   R0,R0,LSR#8
+    SWIVC   XOS_BPut
+    MOVVC   R0,R0,LSR#8
+    SWIVC   XOS_BPut
+
+    MOVVC   R0,#1
+    MOVVC   R2,#16+36-4
+    SWIVC   XOS_Args                      ; Set Sprite file ptr to Offset to mask data
+
+    MOVVC   R0,#&2C                       ; Write Offset to mask data (No mask) (sprBuffer%!52)
+    SWIVC   XOS_BPut
+    MOVVC   R0,#0
+    SWIVC   XOS_BPut
+    SWIVC   XOS_BPut
+    SWIVC   XOS_BPut
+
+    ; IF ((sprType% >>> 31) AND 1) = 1 THEN sprData%!40 = sprType% AND &7FFFFFFF ; REM Remove wide mask bit if set
+    ADDVC   R2,R2,#4                      ; Ptr to Sprite type (16+40-4)
+
+    ; Read Sprite Type
+    SWIVC   XOS_BGet
+    MOVVC   R3,R0
+    SWIVC   XOS_BGet
+    ORRVC   R3,R3,R0,LSL#8
+    SWIVC   XOS_BGet
+    ORRVC   R3,R3,R0,LSL#16
+    SWIVC   XOS_BGet
+    ORRVC   R3,R3,R0,LSL#24
+
+    BVS     App_Qoi2Spr_Exit              ; On error exit
+
+    TST     R3,#1:SHL:31                  ; Is bit 31 (wide mask) set?
+    BEQ     %FT96                         ; If already clear then don't write it back
+
+    MOV     R0,#1
+    SWI     XOS_Args                      ; Set Sprite file ptr back to Offset to Sprite type (16+40-4)
+
+    BICVC   R0,R3,#1:SHL:31               ; Else clear bit 31 and write it back
+    SWIVC   XOS_BPut
+    MOVVC   R0,R0,LSR#8
+    SWIVC   XOS_BPut
+    MOVVC   R0,R0,LSR#8
+    SWIVC   XOS_BPut
+    MOVVC   R0,R0,LSR#8
+    SWIVC   XOS_BPut
+    BVS     App_Qoi2Spr_Exit              ; On error exit
+    B       %FT96
+
+94
+    LDR     R4,[R12,#spr_DataAddr]        ; Start of Sprite image data in memory
+    SUB     R4,R4,#16+44                  ; Move to start of Sprite header
+
+    ; Write offset to mask
+    MOV     R5,#&2C
+    STR     R5,[R4,#(16+36)]              ; Offset to mask = Offset to image
+    ; R8 = size of image
+    ADD     R5,R5,R8                      ; Offset to next sprite = offset to image + image size
+    STR     R5,[R4,#(16+0)]               ; Offset to next sprite from this sprite
+
+    ADD     R5,R5,#16
+    STR     R5,[R4,#0]                    ; File size = 16 + 44 + sprDataSize%
+    STR     R5,[R4,#12]                   ; Offset to first free word (= EOF)
+
+    ; IF ((sprType% >>> 31) AND 1) = 1 THEN sprData%!40 = sprType% AND &7FFFFFFF ; REM Remove wide mask bit if set
+    LDR     R0,[R4,#(16+40)]              ; Sprite Mode word
+    TST     R0,#1:SHL:31                  ; Is bit 31 (wide mask) set?
+    BICNE   R0,R0,#1:SHL:31               ; Clear bit 31
+    STRNE   R0,[R4,#(16+40)]
+
+96
+    MOV     R0,#0                         ; Exit with no error
+
+    ; Drop through to App_Qoi2Spr_Exit
+
+
+App_Qoi2Spr_Exit                          ; On entry: R0 = Ptr to error block or error number
+
+    STR     R0,[R12,#err_state]           ; Store ptr to the error block if R0 <> 0
+
+    ; Check for Escape pressed in case we missed it
+    SWI     OS_ReadEscapeState            ; C is set if Escape has been pressed
+    MOVCS   R0,#124                       ; If so, then call OS_Byte 124 to clear Esc condition
+    SWICS   OS_Byte
+
+    ; Restore Escape conditions to when we started
+    MOV     R0,#229
+    LDR     R1,[R12,#esc_state]           ; Current state (0=Enabled, <>0=Disabled)
+    MOV     R2,#0
+    SWI     OS_Byte
+
+    SWI     XHourglass_Off
+
+    ; Exit, making sure V flag is clear
+    CMP     PC,#0
+
+    LDMFD   R13!,{R8-R12,PC}              ; Restore entry registers
+
+    END
+

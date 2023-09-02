@@ -1,0 +1,101 @@
+===============================================================================
+
+  ,ad8888ba,      ,ad8888ba,    88
+ d8"'    `"8b    d8"'    `"8b   88       !3QOI : Convert QOI files into Sprites
+d8'        `8b  d8'        `8b  88               and vice versa
+88          88  88          88  88
+        88  8P  Y8,        ,8P  88    Version  : 1.00 (27 Aug 2023)
+  aa     Y88P    Y8a.    .a8P   88               (C) Richard Coleman, 2023
+  `"Y8888Y"Y8a    `"Y8888Y"'    88
+
+
+             !3QOI is licensed under the terms of the MIT license
+
+===============================================================================
+
+!3QOI is a PhotoDesk handler for converting images in the "QOI" format to RISC
+OS Sprite, and vice versa.
+
+The QOI filetype (&A61) has been allocated by ROOL.
+
+The Quite OK Image (QOI) format, invented by Dominic Szablewski, is designed for
+fast, lossless image compression. The specification, reference code and example
+images can be found at https://qoiformat.org/
+
+This application conforms to version 1.0 2022-01-05 of the QOI specification.
+
+
+INSTALLATION
+===============================================================================
+
+Copy the application "!3QOI" into !Photodesk.Resources.Formats and it is ready
+to use.
+
+To set the filetype of a QOI file downloaded from the Internet or from a Windows
+PC, add the following to your Mimemap file:
+    image/x-qoi		QOI		a61	.qoi
+
+
+LOADING & SAVING IN PHOTODESK
+===============================================================================
+
+* When QOI files are double clicked in a filer window they will load into
+  PhotoDesk, starting up PhotoDesk if it is not already running.
+  To change this behaviour, see the PhotoDesk manual section on Format loading
+  preferences.
+
+* As QOI files are not able to store the DPI, loading a QOI file uses the
+  default DPI specified in PhotoDesk preferences, but this can be any value
+  from 1..9999, but this handler restricts this to 22, 45, 90 or 180 by taking
+  the following ranges:
+  1..33 = 22 dpi, 34..67 = 45 dpi, 68..134 = 90 dpi, >134 = 180 dpi.
+
+* When saving, the file extension "/qoi" is not added automatically to the
+  filename. This requires a change to the PhotoDesk application itself.
+
+* To include the mask when saving as a QOI file the mask icon must be selected
+  in the Channels dialogue.
+
+* Pressing Escape will abandon the loading or saving of the QOI file. If saving,
+  then any file that is in the process of being created will be deleted.
+
+
+ACKNOWLEDGMENTS
+===============================================================================
+
+With thanks to Andrew Rawnsley and XAT for providing the source code to other
+file format handlers which were a great help in creating this QOI handler.
+
+
+SUPPORT
+===============================================================================
+
+For support queries or any other help with this software, please contact:
+    coleman@orpheusmail.co.uk
+
+
+LICENSE
+===============================================================================
+
+Copyright (c) 2023 Richard Coleman
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions :
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+===============================================================================
+

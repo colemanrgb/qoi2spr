@@ -1,0 +1,110 @@
+# !Qoi2Spr and !TransQoi UK Messages
+#
+Esc:Escape pressed, conversion aborted
+CantLoad:Not a QOI or a Sprite file
+NotOpenFile:Unable to open file '%0'
+NotWriteFile:Unable to write to file '%0'
+NotValidQ:'%0' is not a valid QOI file
+NoMemL:Not enough memory to load %0 file (Need %1bytes)
+NoMemC:Not enough memory to create %0 file (Need %1bytes)
+ErrPath:Invalid path '%0'
+PathTooLong:Expanded directory path too long, max length: 254 characters
+ErrFile:Invalid filename '%0'
+FileTooLong:Expanded filename too long, max length: 254 characters
+NoWildSrc:Wildcards are not allowed in <source>
+NoWildDest:Wildcards are not allowed in <destination>
+IsDir:'%0' is a directory
+IsImage:'%0' is an Image file
+NoFile:File '%0' not found
+NotRead:Owner read not allowed '%0'
+Sprite:Sprite '%0':
+
+# !Qoi2Spr UK Messages
+#
+MenuI:Info
+MenuH:Help...
+MenuQ:Quit
+ErrFrom:Error from
+MsgFrom:Message from
+NotValidS:'%0' is not a valid Sprite file
+TooSmall:Buffer (%0bytes) too small for QOI data, need %1bytes
+ToSave:To save, drag the icon to a directory/application Filer window
+BadData:Data transfer failed: Receiver died
+ProcessN:Processing %0 %1 files ...
+ProcessF:Processing file '%0' ...
+SavedS:... from Sprite '%0'
+FileSame:Destination file cannot be the same as Source file
+CreateDir:Creating directory '%0':
+NoScrap:Wimp$Scrap is not defined
+SprMSB:Mode selector blocks not supported
+SprNotRO5:Invalid RISC OS 5 Sprite
+SprInvalid0:Sprite Type 0 (Mode %0) is not supported
+SprInvalid1:Unsupported Sprite Type (%0)
+SprInvalid2:Invalid image data size (%0bytes)
+SprInvalid2m:Invalid mask data size (%0bytes)
+NoTemplate:Cannot load template '%0'
+TemplateMem:Not enough memory to load window template '%0' (Need %1bytes)
+NotIndirect:Icon %0 is not indirected
+NotWrite:Icon %0 is not writable
+Icon4n:Convert %0 Sprites
+Skip1:Skipping existing file '%0'
+Skip2:(skipped %0 existing Sprites)
+Overwrite:Overwrite file '%0'?
+OverwriteOpts:Yes,No,Number,Abort
+NoOverwriteOpts:Number,Skip
+FileExist:Output file '%0' exists
+FileExistAsk:Overwrite, Skip, Number, Rename it? (O/S/N/R)
+FileExistChars:oOsSnNrR
+FileExistAsk2:Skip, Number, Rename it? (S/N/R)
+FileExistChars2:sSnNrR
+FileExistDir:Directory '%0'
+FileExistName:Existing filename '%0'
+FileExistNewName:Enter new filename:
+FileExistNumber:Using file '%0'
+IgnoreNewName:File '%0' exists; using previous filename
+Converted:Converted %0 out of %1 Sprites
+ConvInFile:in file '%0'
+CanConvert:Can convert %0 out of %1 Sprites
+NoHelp:Help not found
+HelpMenu0:Move the pointer right to view information about this program.
+HelpMenu1:Click to read the manual.
+HelpMenu2:Click to quit the program.
+HelpIconbar:Drag a QOI file here to convert to Sprite or a Sprite to convert to QOI.
+HelpAbout:This window gives you information about this program.
+HelpDPImenu:This menu allows you to select the DPI value used.
+HelpSaveAs:This window allows you to drag an icon representing a file to a directory display or another application.
+HelpSaveAs0:Drag this icon to the directory in which you want to save the file, or drag it to the application to which you wish to transfer the data.
+HelpSaveAs1:This shows the filename for this data. If it is not a full pathname, drag the icon to a directory display.
+HelpSaveAs2:Click SELECT to save the data with the above filename. If it is not a full pathname, you must drag the icon to a directory display.
+HelpSaveAs3:Click SELECT to close this window without saving the data.
+HelpSaveAs6:If selected will create a RISC OS 3.5 Sprite with a 1bpp mask.
+HelpSaveAs7:If selected will create a RISC OS 3.5 Sprite with an 8bpp alpha mask.
+HelpSaveAs8:If selected will create a RISC OS 5 Sprite with an alpha channel instead of a mask.
+HelpSaveAs9:This shows the X DPI value selected for the Sprite.
+HelpSaveAs10:This shows the Y DPI value selected for the Sprite.
+HelpSaveAs11:Click to show a menu of possible X DPI values.
+HelpSaveAs12:Click to show a menu of possible Y DPI values.
+HelpSaveAs13:If ticked will remove any 1bpp or 8bpp mask when all the mask bits are solid. Will only use an alpha channel if the QOI has 4 channels
+HelpSaveAs40:If ticked will convert all Sprites in the Sprite file to QOI files, stored in a directory.
+HelpSaveAs50:If ticked will not add a "/qoi" extension to the filename.
+HelpCmdline0:Convert between QOI (Quite Ok Image) and Sprite. Version: %0
+HelpCmdline1:Filename to convert, either QOI or Sprite. Wildcards may be used
+HelpCmdline2:Filename to save converted <source> to. If -all specified then will be a directory
+HelpCmdline3:Force overwriting of existing <destination>
+HelpCmdline4:Skip existing <destination>. Overrides -force
+HelpCmdline5:If <destination> exists then append a number to the file being converted. Overrides -skip and -force
+HelpCmdline6:Display information on files as they are processed
+HelpCmdline7:Use a Dynamic Area instead of Wimpslot. <N> is max size of Dynamic Area in Mb
+HelpCmdline8:Converting a QOI to a Sprite:
+HelpCmdline9:Create a RISC OS 3.5 Sprite with a 1bpp mask
+HelpCmdline10:Create a RISC OS 3.5 Sprite with an 8bpp alpha mask. Overrides -mask1
+HelpCmdline11:Create a RISC OS 5 Sprite with an alpha channel instead of a mask. Overrides -mask1 and -mask8
+HelpCmdline12:With -mask1 or -mask8 will remove the mask if all bits of the mask are solid
+HelpCmdline13:With -alpha will only use an alpha channel if the QOI has 4 channels
+HelpCmdline14:Set the mask and alpha channel options according to the number of channels in the QOI file.
+HelpCmdline15:Overrides -mask1, -mask8, -alpha and -clean. Can be shortened to -auto
+HelpCmdline16:Specify the X eigen value in <N> (where <N> is 0-3 or 180, 90, 45, 22). Defaults to 1 (90 DPI)
+HelpCmdline17:Specify the Y eigen value in <N> (where <N> is 0-3 or 180, 90, 45, 22). Defaults to 1 (90 DPI)
+HelpCmdline18:Converting a Sprite to a QOI:
+HelpCmdline19:If more than one Sprite in <source> then extract all Sprites in the file and save to directory <destination>
+HelpCmdline20:Does not add the "/qoi" extension when creating a QOI file. Can be shortened to -e

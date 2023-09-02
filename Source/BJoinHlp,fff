@@ -1,0 +1,10 @@
+BJoin 0.03 (12 Oct 2012)
+
+Copyright © 7th software, 2004
+
+Command line utility to append a number of tokenised BASIC programs into one program.
+
+Syntax: *BJoin <main> [<file> | <dir> -Recurse] [-Verbose]
+
+Adds <file> to <main>
+

@@ -1,0 +1,30 @@
+In this directory are the source files for building the different programmes for converting QOI to Sprite and vice versa.
+
+They are designed for use with ObjAsm and the Linker from the DDE.
+
+
+There are 4 Obey files which do the work of compiling the sources into the relevant programme.
+They are all intended to be run from a TaskWindow with the current directory set to the Source directory.
+
+1. CompileApp creates the !RunImage, AssemCode and Lib_Wimp files inside !Qoi2Spr.
+   The AssemCode file is created from s.(App).!App which loads and assembles the other files.
+2. CompileModule creates the RISC OS 4 Image File Converter module ConvertQOI, controlled by s.(Module).!Module.
+3. CompilePD creates the PhotoDesk format handler file !3QOI.Handler, controlled by s.(PhotoDesk).!Handler.
+4. CompileTransQOI creates the !Convert, AssemCode and Messages2 files for !TransQOI.
+   The AssemCode file is created from s.(App).!App which loads and assembles the other files.
+   The Messages2 file is a copy of the Messages file in !Qoi2Spr and the message lines which are pertinent only to !Qoi2Spr need to be removed manually.
+
+
+s.VersionASM contains the version information for the Assembly files, and s.VersionBas has the same for the BASIC files.
+
+
+BJoin is used to combine the various BASIC files into a single BASIC file.
+BASSwitch is then used to remove lines that aren't required (eg debugging code), depending on the variables set in the system variable <Qoi2Spr$Debug>.
+
+To turn debugging on and off with the BASIC files, set DEBUG=TRUE or DEBUG=FALSE, as appropriate, in <Qoi2Spr$Debug> within the CompileApp and CompileTransQOI files.
+
+Debugging code has been removed from the Assembly files.
+
+The debugging routines use Reporter (v2.66 or later) so you need to make sure it is loaded before running any of the programmes if debugging is turned on.
+
+

@@ -1,0 +1,207 @@
+; MiscOp SWI routine
+; validate_QOI: Read QOI header and return image details
+;==================================================================================================
+
+
+IFC_MiscOp    FunctionSig                       ; MiscOp routine for QOI -> Sprite and Sprite -> QOI
+
+; On Entry:
+;   R1  = &0A610FF9. Will error if Destination filetype is not &FF9 Sprite
+;   R2  = Pointer to QOI image data
+;   R3  = Length of QOI image data
+;   R4  = Operation type. If not &400 then error err_ConverterUnknownMiscOp(3) ("Unknown MiscOp operation")
+;   R12 = Pointer to workspace
+
+; On Exit (V clear):
+;   R0  = width in pixels
+;   R1  = height in pixels
+;   R2  = bits per pixel (always 32bpp)
+;   R3  = Image flags:
+;         Bit 0 = 0 (No palette)
+;             1 = 1 (Always colour, have no way of knowing if greyscale or not)
+;             2 = 1 if 4 channels, else = 0 if 3 channels
+;           3-5 = 0 (No interlace)
+;   R4  = x DPI (always 90)
+;   R5  = y DPI (always 90)
+;   Other registers preserved
+
+; On Exit (V set):
+;   R0  = Error code:
+;           3 = err_ConverterUnknownMiscOp ("Unknown MiscOp operation")
+;           5 = err_ConverterCorruptData ("ImageFile data is corrupt")
+;   Other registers preserved
+
+; Only get here if filetypes in R1 match mine.
+;   If more than one filetype pair then need to check that Destination filetype is Sprite
+
+
+    STR     R14,[R13,#-4]!                ; Preserve R14
+
+    STMFD   R13!,{R1-R5}                  ; Preserve entry registers
+
+; Registers available: R5-R11
+
+    ; Check MiscOp is for QOI -> Sprite
+    MOV     R5,R1,LSL#16                          ; Get just the Destination filetype
+    SUB     R5,R5,#&0FF00000                      ; Can't do &FF9, so subtracting &FF0 should leave 9
+    CMP     R5,#&90000
+    MOVNE   R0,#err_ConverterUnknownMiscOp        ; =3
+    BNE     IFC_MiscOp_Error
+
+    ; Check R4 = &400
+    CMP     R4,#&400                              ; = Converter_MiscOp_Sprite_ReadInfo
+    MOVNE   R0,#err_ConverterUnknownMiscOp        ; =3
+    BNE     IFC_MiscOp_Error
+
+    ; Ignore DPI values (bit 23 set)
+
+    ; Validate QOI image data
+    ; In: R2 = QOI data addr, R3 = QOI data size
+
+    BL      validate_QOI
+
+    BVS     IFC_MiscOp_Error
+
+    ADD     R13,R13,#20                   ; Reset stack instead of popping R1-R5 otherwise we'll overwrite the return values
+
+    ; Out: R0 = width, R1 = height, R4 = 0 or 1 (3 or 4 channels). R2,R3,R5 corrupt
+
+    ; Return values in R0-R5. R0 = width, R1 = height
+    MOV     R2,#32                        ; 32bpp
+
+    ; Set image flags (R3) bits 0 = 0 (No palette), 3-5 = 0 (No interlacing)
+    MOV     R3,#2_10                      ; set bit 1 (Image is colour)
+    ORR     R3,R3,R4,LSL#2                ; set bit 2 if have 4 channels (Image has alpha channel or mask)
+
+    ; Set DPI in R4, R5
+    MOV     R4,#90                        ; x DPI. No DPI in QOI so default to 90
+    MOV     R5,#90                        ; y DPI
+
+    ; Exit, making sure V flag is clear
+    CMP     PC,#0
+    LDR     PC,[R13],#4                   ; Exit
+
+
+IFC_MiscOp_Error    FunctionSig
+
+    LDMFD   R13!,{R1-R5}                  ; Restore entry registers
+
+    ; Set V
+    CMP     PC,#1<<31                     ; Set V. R0 already set
+  IF {CONFIG} = 32
+    CMNVC   PC,#1<<31                     ; Set V (Needed for 32bit, no effect in 26bit)
+  ENDIF
+
+    LDR     PC,[R13],#4                   ; Exit
+
+
+validate_QOI    FunctionSig
+;==================================================================================================
+
+; Validate QOI image data
+; Check if width <= 0, height <= 0, channels < 3 or > 4, colspc > 1. channels and colspc are bytes so in range 0..255
+
+; On Entry:
+; R2  = Pointer to QOI image data
+; R3  = Length of QOI image data
+; R12 = Pointer to workspace
+
+; On Exit (V clear):
+; R0 = width in pixels
+; R1 = height in pixels
+; R2 = Corrupt
+; R3 = Corrupt
+; R4 = 1 if 4 channels, else = 0 if 3 channels
+; R5 = Corrupt
+; Other registers preserved
+
+; On Exit (V set):
+; R0 = Error code 5
+; R1-R5 = Corrupt
+; Other registers preserved
+
+
+    ; Check Length of QOI image data - unsigned CMP (signed comparison would limit filesize to 2GB)
+    CMP     R3,#(QOI_HEADER_SIZE + QOI_FOOTER_SIZE)
+    BLS     validate_Error_5              ; "File size is too small for a QOI file"
+
+    ; Check footer = &00000000,00000001   ; May not be word aligned so need to do a byte at a time
+    ADD     R1,R2,R3                      ; Takes us 1 byte beyond the end of QOI data
+    LDRB    R5,[R1,#-1]!
+    CMP     R5,#1                         ; Last byte should = 1
+    LDREQB  R5,[R1,#-1]!
+    CMPEQ   R5,#0                         ; preceded by 7 zeroes
+    LDREQB  R5,[R1,#-1]!
+    CMPEQ   R5,#0
+    LDREQB  R5,[R1,#-1]!
+    CMPEQ   R5,#0
+    LDREQB  R5,[R1,#-1]!
+    CMPEQ   R5,#0
+    LDREQB  R5,[R1,#-1]!
+    CMPEQ   R5,#0
+    LDREQB  R5,[R1,#-1]!
+    CMPEQ   R5,#0
+    LDREQB  R5,[R1,#-1]                   ; Don't need writeback on the last byte
+    CMPEQ   R5,#0
+    BNE     validate_Error_5              ; "File does not have a valid QOI footer"
+
+    ; Check header
+    LDMIA   R2,{R0,R1,R3,R4}              ; Get QOI header ("qoif",width,height,chan+colspc) into registers
+    LDR     R5,[R12,#QOI_Magic]           ; "qoif" [R12,#108]
+    CMP     R5,R0                         ; Does header begin with magic word "qoif"
+    BNE     validate_Error_5              ; "File does not have a valid QOI identifier"
+
+    ; Error if width or height = 0
+    CMP     R1,#0
+    CMPNE   R3,#0
+    BEQ     validate_Error_5              ; "Width or height can't be zero"
+
+    ; Check colour space (= 0 or 1)
+    ; R4 contains colour space byte and channels byte (&xxxxCSCh)
+    AND     R0,R4,#&FF00                  ; Get Colour Space CS value into R0
+    CMP     R0,#&100                      ; Not actually used but check it's 0 or 1 anyway
+    BHI     validate_Error_5              ; "Colour space must be 0 or 1"
+
+    ; Check channels (= 3 or 4)
+    AND     R4,R4,#&FF                    ; R4 now contains just channels byte (= 3 or 4)
+    SUB     R4,R4,#3                      ; R4 = 0 or 1
+    CMP     R4,#1
+    BHI     validate_Error_5              ; "Channels must be 3 or 4"
+
+    ; width (R1) and height (R3) are in Big Endian
+
+    ; Swap endian (width) and move into R0
+    ;REV   R0,R1                          ; ARMv6
+    EOR     R5,R1,R1,ROR#16
+    BIC     R5,R5,#&FF0000
+    MOV     R1,R1,ROR#8
+    EOR     R0,R1,R5,LSR#8
+
+    ; Swap endian (height) and move into R1
+    ;REV   R1,R3                          ; ARMv6
+    EOR     R5,R3,R3,ROR#16
+    BIC     R5,R5,#&FF0000
+    MOV     R3,R3,ROR#8
+    EOR     R1,R3,R5,LSR#8
+
+; End validation
+    ; Clear V flag
+    CMP     PC,#0
+    MOV     PC,R14                        ; Return to calling routine
+
+
+validate_Error_5    FunctionSig           ; Set error block from calling validate_QOI
+
+    MOV     R0,#err_ConverterCorruptData  ; =5
+
+    ; Set V
+    CMP     PC,#1<<31                     ; Set V
+  IF {CONFIG} = 32
+    CMNVC   PC,#1<<31                     ; Set V (Needed for 32bit, no effect in 26bit)
+  ENDIF
+
+    MOV     PC,R14                        ; Return to calling routine
+
+
+    END
+

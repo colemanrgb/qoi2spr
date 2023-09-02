@@ -1,0 +1,21 @@
+| Compile source code for a RISC OS 4 IFC module
+
+Set Qoi2Spr$CompileDir <Obey$Dir>
+
+
+| To produce a listing add cmd line options: --list=<Qoi2Spr$CompileDir>.o.Module_list --width=132 --length=0
+| and add "OPT 1+8192" to start of s.(Module).!Module (Turns on normal listing + turns off listing conditional directives)
+
+Echo Assembling RISC OS 4 Module QOI Converter ...
+Echo
+IfThere <Qoi2Spr$CompileDir>.o.!Module_obj Then Delete <Qoi2Spr$CompileDir>.o.!Module_obj
+objasm --no_esc --no_warn -apcs=/32 <Qoi2Spr$CompileDir>.s.(Module).!Module -o <Qoi2Spr$CompileDir>.o.!Module_obj
+
+IfThere <Qoi2Spr$CompileDir>.o.!Module_obj Then Else Obey
+
+Echo
+Echo ... Linking ...
+link -rmf <Qoi2Spr$CompileDir>.o.!Module_obj -REMOVE -o <Qoi2Spr$CompileDir>.^.RISCOS4.ConvertQOI.ConvertQOI
+Echo ... Done
+Echo
+

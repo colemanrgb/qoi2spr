@@ -1,0 +1,14 @@
+| Load the ImageFileConverter module: ConvertQOI
+| !Run
+
+Set File$Type_A61 QOI
+DOSMap QOI &A61
+If "<Qoi2Spr$Dir>" = "" Then Iconsprites <Obey$Dir>.5Sprites
+
+| Check that the ImageFileConvert module is loaded
+Set ConvertQOI$Temp "1"
+RMEnsure ImageFileConvert 0.00 Set ConvertQOI$Temp "0"
+
+| If ImageFileConvert module is loaded (ConvertQOI$Temp = "1") then load the module
+If "<ConvertQOI$Temp>" = "1" Then IfThere <Obey$Dir>.ConvertQOI Then RMEnsure ConvertQOI 1.00 RMLoad <Obey$Dir>.ConvertQOI
+Unset ConvertQOI$Temp

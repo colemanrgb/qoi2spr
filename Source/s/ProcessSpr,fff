@@ -1,0 +1,634 @@
+; Process Sprite into a QOI
+; Used by s.(App).Spr2Qoi and s.(Module).IFC_Spr2Qoi
+;==================================================================================================
+
+
+process_sprite    FunctionSig
+
+; Process Sprite pixels into QOI chunks
+
+; On Entry:
+; R5 = Length of Sprite line (Width in words (width*4)) or Length of Mask line
+; R6 = Mask Addr
+; R8 = Height
+
+; On Exit:
+; If R1 = -1 then R0 = Ptr to error block
+; If R1 <> -1 and R0 <> 0 then buffer is too small, and R0 = Ptr to error block (err_BufSize), R1 = size of buffer required
+; If R1 <> -1 and R0 = 0 then buffer is either more than needed or just enough, R1 = size of buffer used
+
+
+    LDR     R10,[R12,#pixel_start]        ; R10 = previous pixel
+    LDR     R11,[R12,#spr_Flags]
+
+    ; R11 = Sprite Type in bits 0-6, rgb/bgr flag in bit 7, alpha flag in bit 8, mask bpp in bits 9-12,
+    ;       Sprite bpp in bits 13-18, Double Pixel flag in bit 19, Greyscale palette flag in bit 20,
+    ;       Old format Sprite flag in bit 21, Processing Mask data flag in bit 22, Wide mask flag in bit 31
+
+
+  IF :DEF:RO4_MODULE
+
+    LDR     R2,[R12,#spr_DataAddr]        ; R2 = Address of Sprite Image
+    MOV     R7,R8                         ; Number of lines (R7) = Height (R8)
+
+  ELSE
+
+    LDR     R1,[R12,#spr_fhandle]         ; =0 if Sprite is all in memory
+    CMP     R1,#0
+    LDREQ   R2,[R12,#spr_DataAddr]        ; R2 = Address of Sprite Image
+    MOVEQ   R7,R8                         ; Number of lines (R7) = Height (R8)
+    BEQ     %FT64
+
+    ; See how many lines from Sprite file can we fit in cache buffer
+    LDR     R1,[R12,#cache_size]          ; R1 = Size of cache buffer
+    LDR     R2,[R12,#spr_CacheAddr]
+
+    ; If Image is 1bpp, 2bpp or 4bpp and Mask is Wide (8bpp) then Mask size > Image size
+    ; Need to load same number of lines for Image and Mask
+
+    ; Calculate Image size
+    MUL     R0,R8,R5                      ; R5 = Length of Sprite line (Width in words (width*4)) or Length of Mask line
+    CMP     R0,R1                         ; Will Image fit in cache buffer?
+    MOVLS   R7,R8                         ; Yes (R0 <= R1) then Number of lines (R7) = Height (R8)
+    BLS     %FT64
+
+    ; No, R0 > R1 so need to work out how many lines will fit = R1 DIV (width*4 or mask_LineLen)
+    MOV     R0,#0                         ; without using DIV routine
+    MOV     R7,#0
+07
+    ADD     R0,R0,R5                      ; Keep adding width*4 or mask_LineLen until we exceed R1
+    CMP     R0,R1
+    ADDLS   R7,R7,#1                      ; R7 will equal number of lines that will fit
+    BLS     %BT07
+64
+
+  ENDIF
+
+
+    MOV     R3,#0                         ; Starting at line 0
+    MOV     R4,#0                         ; Number of lines processed so far = 0
+
+    ; Number of lines (R7) = Height (R8)
+
+
+spr_vm_loop
+
+  IF :LNOT::DEF:RO4_MODULE
+    CMP     R7,R8                         ; If number of lines that fit in cache (R7) > Number of lines still to process (R8)
+    MOVHI   R7,R8                         ; then set R7 = R8
+  ENDIF
+
+    MOV     R1,R3                         ; Starting at this line
+    MOV     R0,R7                         ; Number of lines that fit in cache
+
+    ADD     R3,R3,R0                      ; Starting line for next time we call VM
+    SUB     R8,R8,R0                      ; R8 = Number of lines still to process
+
+    STMFD   R13!,{R0,R1,R3,R7,R8}         ; Preserve VM loop registers - Change these then edit ADDVS R13,R13,#(10*4) below!!!!!!!!
+                                          ;                              and ADDCS R13,R13,#(5*4) below!!!!!!!!
+    LDR     R1,[R12,#qoi_RunCount]        ; Run count
+
+    MOV     R8,R0
+
+
+spr_get_line_loop
+
+
+  IF :DEF:RO4_MODULE
+
+    SUBS    R4,R4,#1
+    MOVLS   R4,R7                         ; Number of lines to process
+
+  ELSE
+
+    LDR     R0,[R12,#spr_fhandle]         ; =0 if Sprite is all in memory
+    CMP     R0,#0
+    BNE     %FT10                         ; See if we need to refill the cache buffer
+
+    ; Sprite is all in memory
+    SUBS    R4,R4,#1
+    MOVLS   R4,R7                         ; Number of lines to process
+    B       %FT50                         ; spr_skip_load_lines
+
+    ; Read data from Sprite file ...
+10
+    SUBS    R4,R4,#1
+    BHI     %FT50                         ; spr_skip_load_lines if R4<>0 and R4<>-1
+
+    LDR     R2,[R12,#spr_CacheAddr]       ; R2 = Address of Sprite Image
+    STR     R2,[R12,#spr_CachePtr]
+    STMFD   R13!,{R0-R3,R7}               ; Preserve registers - Change these then edit ADDVS R13,R13,#(10*4) below!!!!!!!!
+    MOV     R1,R0                         ; R1 = Sprite File handle
+    LDR     R3,[R12,#spr_widthWords]
+    MUL     R3,R7,R3                      ; R3 = Bytes to read = number of lines in VM * width*4
+    STR     R3,[R12,#spr_CacheFree]       ; Update amount of data stored in cache
+    LDR     R4,[R12,#spr_fptr]            ; R4 = File ptr
+    MOV     R0,#3                         ; Read bytes from file ptr in R4
+    SWI     XOS_GBPB                      ; Read bytes from current file ptr
+    ADDVS   R13,R13,#(10*4)               ; Clear registers from the stack: {R0-R3,R4} and {R0,R1,R3,R7,R8}
+    MOVVS   R1,#-1
+    BVS     App_Spr2Qoi_Exit
+    STR     R4,[R12,#spr_fptr]            ; R4 = File ptr
+
+    ; Load Mask into Mask cache at the same time
+    ; R6 = Address of Mask data (0 = No mask)
+    ; #spr_MaskSize = Length of Mask line in bytes
+
+    CMP     R6,#0
+    BEQ     %FT44                         ; 0 = No Mask
+
+    MOV     R0,#3                         ; Read bytes from file ptr in R4
+    LDR     R2,[R12,#mask_CacheAddr]      ; R2 = Address of Mask data
+    STR     R2,[R12,#mask_CachePtr]
+    MOV     R6,R2
+    LDR     R3,[R12,#mask_LineLen]
+    MUL     R3,R7,R3                      ; R3 = Bytes to read = Number of lines in VM * Length of Mask line
+    LDR     R4,[R12,#mask_fptr]           ; R4 = File ptr
+    SWI     XOS_GBPB                      ; Read bytes from current file ptr
+    ADDVS   R13,R13,#(10*4)               ; Clear registers from the stack: {R0-R3,R4} and {R0,R1,R3,R7,R8}
+    MOVVS   R1,#-1
+    BVS     App_Spr2Qoi_Exit
+    STR     R4,[R12,#mask_fptr]           ; R4 = File ptr
+
+44
+    LDMFD   R13!,{R0-R3,R4}               ; Restore registers
+
+50                                        ; spr_skip_load_lines
+
+  ENDIF
+
+    STMFD   R13!,{R4,R5,R7,R8}            ; Preserve line registers
+
+; Sort out Mask details at start of line
+
+    CMP     R6,#0
+    BEQ     %FT08
+
+    ; Need to calculate R3 each time we start a line as it is corrupted as we process the Mask
+
+    ; Masks for RISC OS 3.5/5 Sprites have LH bit = 0
+    LDR     R0,[R12,#(mask_LoopData+8)]   ; 1 << log2bpp
+    ANDS    R3,R11,#1:SHL:21              ; See if bit 21 Old format Sprite flag is set
+
+    ; If not then New format Sprite then ANDS ensures Mask LH bit = 0
+    LDRNE   R3,[R12,#spr_LeftBits]        ; else get LH bit, in pixels
+    MOVS    R3,R3,LSL R0                  ; and change to bits = Starting bit of first Word
+
+    LDR     R4,[R6],#4                    ; Get first Mask Word of the line
+    MOVNE   R4,R4,LSR R3                  ; If LH bit > 0 then shift word to correct position to remove LH bits from start of line
+    RSB     R3,R3,#32                     ; Number of bits left to process in Word = 32 - spr_LeftBits
+
+    ADD     R0,R12,#mask_LoopData         ; Space for 4 registers: {R3,R4,R8,R10}
+    STMIA   R0,{R3,R4}
+    ; R3=bits left, R4=Mask Word, 1 << log2bpp, bitmask
+
+08
+
+    LDR     R3,[R12,#width]               ; In pixels
+
+    ; R9 = Sprite bpp (1,2,4,8,16,24,32), R11 = spr_Flags
+    MOV     R9,R11,LSR#13
+    AND     R9,R9,#&3F
+
+    CMP     R9,#16
+    BHI     sprTypes678                   ; Sprite Types 6 (32 bpp), 7 (32 bpp) and 8 (24 bpp)
+    BEQ     spr_16bpp                     ; Sprite Types 5,10,16
+
+
+    ; Drop through to process Sprite Types 1-4
+
+
+; R3 = width in pixels, R2 = Addr of Image, R9 = Sprite bpp, R11 = Sprite Mode values
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  Code  outline  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;  bitmask% = (1 << bpp%) - 1 ; not change for double pixel
+;;  log2bpp% = bpp% - 1 ; 0 = 1bpp, 1 = 2bpp, 2 = 4bpp, 3 = 8bpp
+;;  if R1 = 1 then log2bpp% += 1 ; double pixel mode
+;;  lh% = LDR [R12,#spr_LeftBits] ; in pixels
+;;  lh% = lh% << log2bpp% ; in bits ; start bit in first Word
+;;
+;;  bitsLeft% = lh%
+;;
+;;  word% = LDR [R2],#4
+;;  if bitsLeft% > 0 then word% = word% >> bitsLeft% ; shift word to correct position to remove lh bits (only do once)
+;;  bitsLeft% = 32 - bitsLeft% ; number of bits left to process in Word
+;;
+;;  loop:
+;;  pixel% = word% AND bitmask%
+;;  if bpp% = 2 then pixel% = pixel% OR (pixel% << 2) + pixel% OR (pixel% << 4) ; 2bpp => a byte
+;;  if bpp% = 1 then if pixel% <> 0 then pixel% = &FF
+;;  if bpp% = 4 then pixel% = pixel% AND &0F : pixel% = pixel% OR (pixel% << 4) ; 4bpp -> a byte
+;;  if bpp% = 8 then nothing to do!
+;;  STRB pixel%,[R6,R3] : r3 += 1
+;;
+;;  width% -= 1 ; one less pixel
+;;  if width% = 0 then exit - line is done
+;;  ; setup for next pixel
+;;  bitsLeft% -= 1 << log2bpp% ; reduce number of bits left to process in Word
+;;  if bitsLeft% > 0 then word% = word% >> (1 << log2bpp%) ; shift Word to get next pixel
+;;  if bitsLeft% = 0 then word% = LDR [R2],#4 : bitsLeft% = 32 ; get next Word
+;;  goto loop
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+
+; R1  = Run Count
+; R2  = Addr of Image
+; R3  = width in pixels
+; R4  = Word
+; R5  = Colour value (&00BBGGRR)
+; R6  = Address of Mask (=0 if no Mask)
+; R7  = bitmask
+; R8  = log2bpp
+; R9  = Sprite bpp / lh / bitsLeft / Address of Palette
+; R10 = Previous Colour value
+; R11 = spr_Flags
+
+
+    ; Process a line of Sprite (Types 1-4) ...
+
+    ; Type 1 (  2 colours BGR)
+    ; Type 2 (  4 colours BGR)
+    ; Type 3 ( 16 colours BGR)
+    ; Type 4 (256 colours BGR)
+
+
+    MOV     R7,#1
+    MOV     R7,R7,LSL R9                  ; 1 << bpp                 (1bpp = 2, 2bpp = 4,   4bpp = 16,    8bpp = 256)
+    SUB     R7,R7,#1                      ; bitmask = (1 << bpp) - 1 (1bpp = 1, 2bpp = %11, 4bpp = %1111, 8bpp = &FF)
+
+    AND     R8,R11,#&7F                   ; Sprite Type in bits 0-6 (Types 1-4)
+    SUB     R8,R8,#1                      ; log2bpp = Sprite Type - 1 (Type 1 = 0, Type 2 = 1, Type 3 = 2, Type 4 = 3)
+
+    ; See if Double pixel flag set (bit 19)
+    TST     R11,#1:SHL:19
+    ADDNE   R8,R8,#1                      ; Yes (NE), then log2bpp = log2bpp + 1
+
+    LDR     R9,[R12,#spr_LeftBits]        ; Get spr_LeftBits, in pixels
+    MOVS    R9,R9,LSL R8                  ; and change to bits = Starting bit of first Word
+
+    LDR     R4,[R2],#4                    ; Get first Word from Sprite line
+    ; If spr_LeftBits > 0 then shift word to correct position to remove lh bits from start of line
+    MOVNE   R4,R4,LSR R9
+    RSB     R9,R9,#32                     ; Number of bits left to process in Word = 32 - spr_LeftBits
+
+; Now process a line of pixels (Image + Mask) ...
+
+Type1_loop
+    AND     R5,R4,R7                      ; Palette entry = Word AND bitmask
+
+    ; R5 = Palette entry. Get RGB colour from Palette (Mask byte already set to solid &FF)
+    ADD     R0,R12,#pal_buffer           ; R0 = Address of Palette in Workspace
+    LDR     R5,[R0,R5,LSL#2]             ; pixel% = !(palette%+(palEntry% * 4)) (&FFBBGGRR)
+
+
+    B       spr_common_line
+
+
+spr_16bpp     FunctionSig
+            ; Type 5  (32K colours 1:5:5:5 TBGR,TRGB,ABGR,ARGB),
+            ; Type 10 (64K colours   5:6:5 BGR,RGB),
+            ; Type 16 ( 4K colours 4:4:4:4 TBGR,TRGB,ABGR,ARGB)
+
+    ; R3 = width in pixels, R2 = Addr of Image, R9 = Sprite bpp, R11 = Sprite Mode values
+
+    ; Turning 5:5:5 into 8:8:8 => (N << 3) OR ((N >> 2) AND %111) for each R,G,B value
+    ; and similar for 5:6:5 except Green has an extra bit and Blue is shifted by 1 bit
+    ; Result is close enough instead of doing: N * 255 / 31, or the overhead of a table
+
+
+    ; Calculate how many bytes to skip as lh bit
+    LDR     R4,[R12,#spr_LeftBits]        ; in bytes (0 or 2)
+    ADD     R2,R2,R4                      ; Skip lh bits at start of line
+
+
+; Now process a line of pixels (Image + Mask) ...
+
+spr_16bpp_loop
+    LDRB    R4,[R2],#1                    ; Read lo byte
+    LDRB    R5,[R2],#1                    ; Read hi byte
+    ORR     R4,R4,R5,LSL#8                ; Combine into 16 bits
+
+    AND     R7,R11,#&7F                   ; Get Sprite Type
+
+    ; Deal with Alpha channel first (for 5: 1 bpp Alpha; for 16: 4 bpp Alpha)
+    TST     R11,#1:SHL:8
+    MOVEQ   R5,#&FF:SHL:24                ; No Alpha channel, so set Mask/Alpha value to solid (&FF)
+    BEQ     %FT10
+
+    ; Have Alpha channel (Type 5 or 16)
+
+    CMP     R7,#16                        ; Type 16 (4 bpp Alpha)
+    MOVEQ   R5,R4,LSR#12                  ; Turn 4 bits Alpha into 8 bits - Get bottom 4 bits of Alpha
+    ORREQ   R5,R5,R5,LSL#4                ; And duplicate into top 4 bits of byte
+    MOVEQ   R5,R5,LSL#24                  ; and shift up into Mask/Alpha position
+
+    ; NE = Type 5 (1 bpp Alpha)
+    MOVNE   R5,#0                         ; Bit is clear, so set transparent
+    TSTNE   R4,#1:SHL:15                  ; Get Type 5 Alpha bit (1 bpp Alpha)
+    MOVNE   R5,#&FF:SHL:24                ; Bit is set, so set solid (&FF)
+10
+
+; R1  = run count
+; R3  = width in pixels
+; R5  = pixel
+; R6  = mask addr
+; R7  = Red value
+; R8  = Blue value
+; R10 = prev pixel
+; R11 = spr_Flags
+
+
+    ; Type 5  (32K colours 1:5:5:5 TBGR,TRGB,ABGR,ARGB),
+    ; Type 10 (64K colours   5:6:5 BGR,RGB),
+    ; Type 16 ( 4K colours 4:4:4:4 TBGR,TRGB,ABGR,ARGB)
+
+    CMP     R7,#10
+
+    ; Type 5 and 10 - Red ...
+    ANDLS   R0,R4,#&001F                  ; Get 5 bits of Red
+    MOVLS   R7,R0,LSL#3                   ; Shift to top of byte
+    ORRLS   R7,R7,R0,LSR#2                ; Get top 3 bits of Red and shift to bottom of byte
+
+    ; Type 5 - Green ...
+    ANDLO   R0,R4,#&03E0                  ; Get 5 bits of Green
+    ORRLO   R5,R5,R0,LSL#6                ; Shift to top of byte
+    ANDLO   R0,R4,#&0380                  ; Get top 3 bits of Green
+    ORRLO   R5,R5,R0,LSL#1                ; And shift to bottom of byte
+    ; and Blue ...
+    ANDLO   R0,R4,#&7C00                  ; Get 5 bits of Blue
+    MOVLO   R8,R0,LSL#9                   ; Shift to top of byte
+    ANDLO   R0,R4,#&7000                  ; Get top 3 bits of Blue
+    ORRLO   R8,R8,R0,LSL#4                ; Add shift to bottom of byte
+
+    ; Type 10 - Green ...
+    ANDEQ   R0,R4,#&07E0                  ; Get 6 bits of Green
+    ORREQ   R5,R5,R0,LSL#5                ; Shift to top of byte
+    ANDEQ   R0,R4,#&0600                  ; Get top 2 bits of Green
+    ORREQ   R5,R5,R0,LSR#1                ; And shift to bottom of byte
+    ; and Blue ...
+    ANDEQ   R0,R4,#&F800                  ; Get 5 bits of Blue
+    MOVEQ   R8,R0,LSL#8                   ; Shift to top of byte
+    ANDEQ   R0,R4,#&E000                  ; Get top 3 bits of Blue
+    ORREQ   R8,R8,R0,LSL#3                ; And shift to bottom of byte
+
+    ; Type 16 - Red ...
+    ANDHI   R7,R4,#&000F                  ; Get bottom 4 bits of Red
+    ORRHI   R7,R7,R7,LSL#4                ; And duplicate into top 4 bits of byte
+    ; and Green ...
+    ANDHI   R0,R4,#&00F0                  ; Get 4 bits of Green
+    ORRHI   R5,R5,R0,LSL#8                ; Shift to top of byte
+    ORRHI   R5,R5,R0,LSL#4                ; And shift to bottom of byte
+    ; and Blue ...
+    ANDHI   R0,R4,#&0F00                  ; Get 4 bits of Blue
+    MOVHI   R8,R0,LSL#12                  ; Shift to top of byte
+    ORRHI   R8,R8,R0,LSL#8                ; And shift to bottom of byte
+
+    ; Swap RGB <-> BGR .......
+    TST     R11,#1:SHL:7                  ; If bit 7 set (NE) then RGB and so need to swap Red and Blue to make BGR
+    ; NE (bit set) = swap red and blue / EQ (bit clear) = don't swap
+    MOVNE   R7,R7,LSL#16                  ; Shift Red into Blue position (r% = r% << 16)
+    MOVNE   R8,R8,LSR#16                  ; Shift Blue into Red position (b% = b% >> 16)
+    ORR     R5,R5,R7
+    ORR     R5,R5,R8
+
+
+    B       spr_common_line
+
+
+spr_type7_loop    FunctionSig             ; 32bpp (CMYK)
+    LDR     R5,[R2],#4                    ; R5 = &KKYYMMCC
+
+    ; CMYK to RGB conversion (&KKYYMMCC to &00BBGGRR) leaving RGB value in R5 (uses R0, R8 and R7) ...
+    AND     R0,R5,#&FF000000              ; R0 = KK
+    AND     R8,R5,#&00FF0000              ; R8 = YY
+    ADDS    R8,R0,R8,LSL#8                ; R8 = KK + YY => Blue (&BB000000)
+    MOVCS   R8,#&FF000000                 ; clamp value
+    MOV     R7,R5,LSL#16                  ; R7 = &MMCC0000
+    ORR     R7,R7,R8,LSR#16               ; Add in Blue ; R7 now = &MMCCBB00
+    ADDS    R8,R0,R7                      ; R8 = KK + MM => Green (&GG000000)
+    MOVCS   R8,#&FF000000                 ; clamp value
+    ORR     R7,R7,R8,LSR#24               ; Add in Green ; R7 now = &MMCCBBGG
+    ADDS    R8,R0,R7,LSL#8                ; R8 = KK + CC => Red (&RR000000)
+    MOVCS   R8,#&FF000000                 ; clamp value
+    MOV     R7,R7,LSL#16                  ; R7 now = &BBGG0000 (Get rid of MMCC)
+    ORR     R7,R7,R8,LSR#16               ; Add in Red ; R7 now = &BBGGRR00
+    MVN     R7,R7                         ; Invert into RGB
+    MOV     R5,R7,LSR#8                   ; and shift to &00BBGGRR
+    ORR     R5,R5,#&FF:SHL:24             ; And add in default Mask/Alpha value of solid (&FF)
+
+
+    B       spr_common_line
+
+
+spr_type8_loop    FunctionSig             ; 24bpp (16M colours) 8:8:8
+    LDRB    R7,[R2],#1                    ; Red
+    LDRB    R5,[R2],#1                    ; Green
+    LDRB    R8,[R2],#1                    ; Blue
+    MOV     R5,R5,LSL#8                   ; pixel% = (g% << 8)
+    ORR     R5,R5,#&FF:SHL:24             ; And add in default Mask/Alpha value of solid (&FF)
+
+    ; Swap RGB <-> BGR .......
+    TST     R11,#1:SHL:7                  ; If bit 7 set (NE) then RGB and so need to swap Red and Blue to make BGR
+    ; NE (bit set) = swap red and blue / EQ (bit clear) = don't swap
+    MOVNE   R7,R7,LSL#16                  ; Shift Red into Blue position (r% = r% << 16). Blue already in Red position
+    MOVEQ   R8,R8,LSL#16                  ; No swap, just shift Blue into Blue position (b% = b% << 16)
+
+    ORR     R5,R5,R7
+    ORR     R5,R5,R8
+
+
+    B       spr_common_line
+
+
+sprTypes678   FunctionSig     ; Sprite Types 6 (32 bpp 8:8:8:8 TBGR,TRGB,ABGR,ARGB), 7 (32 bpp CMYK) and 8 (24 bpp 8:8:8 BGR,RGB)
+
+    ; R3 = width in pixels, R2 = Addr of Image, R9 = Sprite bpp, R11 = Sprite Mode values
+
+    AND     R4,R11,#&7F                   ; Get Sprite Type
+    CMP     R4,#7
+    BEQ     spr_type7_loop
+    ; Calculate how many bytes to skip as lh bit
+    LDRHI   R4,[R12,#spr_LeftBits]        ; in bytes (0 or 3)
+    ADDHI   R2,R2,R4                      ; Skip lh bits at start of line
+    BHI     spr_type8_loop
+
+    ; Drop through to spr_type6_loop
+
+
+; Now process a line of pixels (Image + Mask) ...
+
+spr_type6_loop                            ; 32 bpp (16M colours) 8:8:8:8 TBGR,TRGB,ABGR,ARGB
+    LDR     R5,[R2],#4                    ; R5 = &AABBGGRR
+
+    ; Check for Alpha channel
+    TST     R11,#1:SHL:8
+    ORREQ   R5,R5,#&FF:SHL:24             ; No Alpha, so ensure default Mask/Alpha value is solid (&FF)
+
+    ; Swap RGB <-> BGR .......
+    TST     R11,#1:SHL:7                  ; If bit 7 set (NE) then RGB and so need to swap Red and Blue to make BGR
+    ; NE (bit set) = Extract and swap red and blue / EQ (bit clear) = don't swap
+    ANDNE   R7,R5,#&FF                    ; Red  = pixel% AND &FF
+    ANDNE   R8,R5,#&FF:SHL:16             ; Blue = pixel% AND &FF0000
+    BICNE   R5,R5,#&FF                    ; Clear Red bits
+    BICNE   R5,R5,#&FF:SHL:16             ; Clear Blue bits
+    ORRNE   R5,R5,R7,LSL#16               ; Shift Red into Blue position (r% = r% << 16)
+    ORRNE   R5,R5,R8,LSR#16               ; Shift Blue into Red position (b% = b% >> 16)
+
+
+    ; Drop through to spr_common_line
+
+
+spr_common_line
+    ; Have we got a Mask? =0 if not else points to start of Mask in Sprite buffer
+    CMP     R6,#0
+    BLNE    add_mask                      ; in [s.WriteMask]
+
+    ; Process Sprite pixel to QOI chunk
+
+    CMP     R5,R10
+    BNE     %FT70                         ; Current pixel <> previous pixel
+
+    ; Current pixel = previous pixel so either start Run (R1 = 0) or already in Run (R1 <> 0)
+    ; spr2qoi will increment Run by 1 so need to take that into account here
+    ; If Run = 0..60 then just add 1 and go round loop
+    ; If Run = 61 then need to call qoi2spr to save Run chunk (don't add 1 here as qoi2spr will do it for us)
+    TEQ     R1,#61                        ; IF (run = 61) then drop through to call qoi_save (will make Run=62)
+    ADDLO   R1,R1,#1                      ; run += 1
+    BLO     %FT71                         ; else see if we have reached the end of the line
+
+70
+    TEQ     R1,#0
+    STRNE   R1,[R12,#qoi_RunCount]        ; Update Run count in qoi_RunCount and write Run chunk
+
+
+    ; Convert a Sprite pixel (&AABBGGRR) into a QOI chunk
+    ; R5  = Sprite pixel
+    ; R10 = Previous pixel
+
+    BL      spr2qoi
+
+    ; On exit: R0 = Sprite pixel or Error block, R1 = -1, 0, 1..61
+
+    MOV     R10,R0                        ; Store current pixel as previous pixel
+
+    ; If R1 = -1 then error from spr2qoi
+    CMN     R1,#1                         ; -1
+    ADDEQ   R13,R13,#(9*4)                ; Clear registers from the stack: {R4,R5,R7,R8} and {R0,R1,R3,R7,R8}
+  IF :DEF:RO4_MODULE
+    BEQ     IFC_Convert_Error             ; and exit, R0 = Ptr to error block
+  ELSE
+    BEQ     App_Spr2Qoi_Exit              ; and exit, R0 = Ptr to error block
+  ENDIF
+
+71
+
+    ; Set for next pixel
+    SUBS    R3,R3,#1                      ; one less pixel in line (width)
+    BEQ     spr_got_line                  ; Exit, have done all pixels in the line
+
+    AND     R5,R11,#&7F                   ; Get Sprite Type
+
+    CMP     R5,#6
+    BEQ     spr_type6_loop
+
+    CMP     R5,#5
+    CMPNE   R5,#10
+    CMPNE   R5,#16
+    BEQ     spr_16bpp_loop
+
+    CMP     R5,#7
+    BEQ     spr_type7_loop
+
+    CMP     R5,#8
+    BEQ     spr_type8_loop
+
+    ; Types 1-4 ...
+    ; Set for next pixel
+    MOV     R5,#1
+    MOV     R5,R5,LSL R8                  ; 1 << log2bpp
+    SUBS    R9,R9,R5                      ; Reduce number of bits left to process in Word: bitsLeft -= (1 << log2bpp)
+    LDREQ   R4,[R2],#4                    ; Get next Word from Sprite line
+    MOVEQ   R9,#32                        ; Number of bits left to process in Word
+    MOVNE   R4,R4,LSR R5                  ; Shift Word to get next pixel: word = word >> (1 << log2bpp)
+    B       Type1_loop
+
+
+; Any more lines to process, is R8=0?
+
+spr_got_line
+
+    ; Need to adjust R2 to point to start of next line if Type 8, 5, 10 or 16
+    AND     R5,R11,#&7F                   ; Get Sprite Type
+    CMP     R5,#8
+    CMPNE   R5,#5
+    CMPNE   R5,#10
+    CMPNE   R5,#16
+    LDREQ   R4,[R12,#spr_RightBits]       ; rh bit is either 0, 1, 2 or 3 bytes to add to R2 (Type 8)
+    ADDEQ   R2,R2,R4                      ; rh bit is either 0 or 2 bytes to add to R2 (Types 5, 10 and 16)
+
+
+    ; Update Hourglass
+
+    LDR     R0,[R12,#hg_onepcentcount]    ; The current 1% row count (Decreasing)
+    SUBS    R5,R0,#1                      ; Done another row
+    STRNE   R5,[R12,#hg_onepcentcount]    ; Current 1% row count not reached 0
+    ; Once reach 0 reset the 1% row count and increment the Percentage display
+    LDREQ   R0,[R12,#hg_pcent]            ; Percent value to show (0..99)
+    LDREQ   R5,[R12,#hg_onepcent]         ; Number of rows that represents 1%
+    ADDEQ   R0,R0,#1                      ; Next %
+    STREQ   R0,[R12,#hg_pcent]
+    STREQ   R5,[R12,#hg_onepcentcount]    ; Reset current 1% row count
+    SWIEQ   XHourglass_Percentage
+
+
+    LDMFD   R13!,{R4,R5,R7,R8}            ; Restore line registers
+
+  IF :LNOT::DEF:RO4_MODULE                ; As long as we're not in a RISC OS 4 Module
+    ; Check for Escape key
+
+    ; In WIMP, the Escape key is disabled and so OS_ReadEscapeState always returns with C clear
+    ; which is why we enable Escape key with OS_Byte 229,0 at the start
+    SWI     OS_ReadEscapeState            ; C is set if Escape has been pressed
+    ADDCS   R13,R13,#(5*4)                ; Clear registers from the stack: {R0,R1,R3,R7,R8}
+    ADRCSL  R0,err_escSave
+    MOVCS   R1,#-1
+    BCS     App_Spr2Qoi_Exit
+  ENDIF
+
+
+    SUBS    R8,R8,#1
+    BHI     spr_get_line_loop             ; Loop back and get next line
+
+    STR     R1,[R12,#qoi_RunCount]        ; Run count
+
+    LDMFD   R13!,{R0,R1,R3,R7,R8}         ; Restore VM loop registers - Change these then edit ADDCS R13,R13,#(5*4) above!!!!!!!!
+
+    TEQ     R8,#0                         ; R8 = Number of lines still to process
+    BNE     spr_vm_loop
+
+
+;--------------- Sprite done, so write footer to QOI file -----------------;
+
+    BL      writeFooter
+
+    ; On return:
+    ; If buffer supplied is more than needed or just enough, then R0 = 0. R1 = size of buffer used
+    ; If buffer supplied is smaller than needed, then R0 = Ptr to error block (err_BufSize), R1 = size of buffer required
+    ; If error then R0 = Ptr to error block, R1 = -1 (Only get an error if using a cache)
+
+
+  IF :DEF:RO4_MODULE
+
+    B       IFC_Spr2Qoi_Exit
+
+  ELSE
+
+    B       App_Spr2Qoi_Exit
+
+  ENDIF
+
+
+    END
+

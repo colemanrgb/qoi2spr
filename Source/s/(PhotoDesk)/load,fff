@@ -1,0 +1,524 @@
+; Load QOI file into PhotoDesk as a 24bpp Sprite (Type 6) with separate Alpha channel
+;==================================================================================================
+
+;------------------------------- QOI info string --------------------------------;
+qoi_info
+    DCD     0                             ; Must be 0 to denote success
+    DCB     "QOI image, ",13
+    ALIGN
+
+;----------------------------------- Error messages -----------------------------;
+err_qoiSize
+    DCD     255
+    DCB     "File size is too small for a QOI file",0
+    ALIGN
+
+err_qoiHdr
+    DCD     255
+    DCB     "File does not have a valid QOI identifier",0
+    ALIGN
+
+err_qoiWH
+    DCD     255
+    DCB     "Width or height can't be zero",0
+    ALIGN
+
+err_qoiChannels
+    DCD     255
+    DCB     "Channels must be 3 or 4",0
+    ALIGN
+
+err_qoiColSpc
+    DCD     255
+    DCB     "Colour space must be 0 or 1",0
+    ALIGN
+
+err_qoiFooter
+    DCD     255
+    DCB     "File does not have a valid QOI footer",0
+    ALIGN
+
+err_escLoad
+    DCD     69
+    DCB     "Load aborted!",0
+    ALIGN
+
+
+;------------------------- Load QOI file into PhotoDesk -------------------------;
+
+; On entry:
+; R10 = Start of Wimp Poll block
+; R11 = in_block
+; R12 = Start of PhotoDesk workspace
+
+; On exit:
+; R0 = Pointer to load status:
+;           R0+0  =0 = load successful;  R0+4 => qoi_info (Info string)
+;           R0+0 <>0 = error number;     R0+4 => error message
+
+
+do_load       FunctionSig
+
+    ; Show hourglass
+    MOV     R0,#50                        ; Delay displaying hourglass for half a second
+    SWI     XHourglass_Start
+
+    ; Enable Escape conditions
+    MOV     R0,#229
+    MOV     R1,#0
+    MOV     R2,#255
+    SWI     OS_Byte
+    STR     R1,[R12,#esc_state]           ; Store Escape current state (0=Enabled, <>0=Disabled)
+
+
+;--------------------------- Open QOI file ----------------------------------------------;
+
+; Workspace is zeroed each time Handler is loaded
+
+    MOV     R0,#&4F                       ; Open file with R/O access, no paths, errors
+    ADD     R1,R10,#44                    ; Points to pathname of QOI file (in wimp block+44)
+    SWI     XOS_Find                      ; File handle in R0
+    BVS     returnErrorQS                 ; Error?
+
+    ; Read and validate QOI file ...
+
+    STR     R0,[R12,#qoi_fhandle]         ; Store QOI file handle (will be set =0 if whole file is in memory)
+    MOV     R10,R0                        ; Store QOI file handle
+
+    ; Check size of QOI file > (QOI_HEADER_SIZE + QOI_FOOTER_SIZE)
+    MOV     R1,R0
+    MOV     R0,#2                         ; Read file size into R2
+    SWI     XOS_Args
+    CMP     R2,#(QOI_HEADER_SIZE + QOI_FOOTER_SIZE)  ; = 14+8
+    ADRLSL  R0,err_qoiSize
+    BLS     returnErrorQS
+
+    ; Store QOI filesize temporarily in workspace for use when claiming QOI buffer
+    STR     R2,[R12,#QOI_ChanColspc]
+
+
+    ; Read QOI footer into scatch buffer first so we get file ptr in the correct position
+    LDR     R7,[R11,#scratch]             ; Pointer to scratch buffer
+
+    SUB     R4,R2,#QOI_FOOTER_SIZE        ; Set file ptr to QOI footer
+    STR     R4,[R12,#qoi_DataEnd]         ; End of QOI data. chunks_len% (= qoiFileSize% - QOI_FOOTER_SIZE%)
+    MOV     R3,#QOI_FOOTER_SIZE           ; Amount of data to read
+    ADD     R2,R7,#(QOI_HEADER_SIZE+2)    ; Store it in scratch buffer immediately following QOI header (+2 so is word aligned)
+    MOV     R0,#3
+    SWI     XOS_GBPB
+    BVS     returnErrorQS
+
+    ; Then read QOI header into scatch buffer
+    MOV     R4,#0                         ; Set file ptr to start of QOI file
+    MOV     R3,#QOI_HEADER_SIZE           ; Amount of data to read
+    MOV     R2,R7                         ; Store it at start of scratch buffer
+    MOV     R0,#3
+    SWI     XOS_GBPB
+    BVS     returnErrorQS
+
+    STR     R4,[R12,#qoi_fptr]            ; qoiData%. Where we are in the QOI file (=start of QOI data)
+
+; R10 = QOI file handle
+; R11 = in_block
+; R12 = PhotoDesk workspace
+
+    ; Get QOI header ("qoif",width,height,chan+colspc) and footer (R8,R9) into registers from scratch buffer
+    LDMIA   R7,{R3,R4,R5,R6,R8,R9}
+
+    ; Starts with magic word "qoif"?
+    LDR     R0,[R12,#QOI_Magic]
+    CMP     R0,R3                         ; Does header begin with magic word "qoif"?
+    ADRNEL  R0,err_qoiHdr
+    BNE     returnErrorQS
+
+    ; Error if width or height = 0
+    CMP     R4,#0
+    CMPNE   R5,#0
+    ADREQL  R0,err_qoiWH
+    BEQ     returnErrorQS
+
+    ; R6 contains channels byte and colour space byte (&xxxxCSCh)
+    ; Channels (3 or 4)
+    ; Don't use as we always create an Alpha/Mask channel but check it's 3 or 4 anyway
+    AND     R0,R6,#&FF                    ; Just get the Channels byte Ch (= 3 or 4) into R0
+    SUB     R0,R0,#3                      ; Now = 0 or 1
+    CMP     R0,#1
+    ADRHIL  R0,err_qoiChannels
+    BHI     returnErrorQS                 ; Error?
+
+    ; Check colour space (= 0 or 1)
+    AND     R0,R6,#&FF00                  ; Get Colour Space CS value into R0
+    CMP     R0,#&100                      ; Not actually used but check it's 0 or 1 anyway
+    ADRHIL  R0,err_qoiColSpc
+    BHI     returnErrorQS                 ; Error?
+
+    ; Check that footer at EOF = &00000000,00000001
+    CMP     R8,#0
+    CMPEQ   R9,#1:SHL:24
+    ADRNEL  R0,err_qoiFooter
+    BNE     returnErrorQS                 ; Error?
+
+    ; width (R4) and height (R5) are in Big Endian
+
+    ; Swap endian (width)
+    ;REV     R4,R4                        ; ARMv6
+    EOR     R0,R4,R4,ROR#16
+    BIC     R0,R0,#&FF0000
+    MOV     R4,R4,ROR#8
+    EOR     R4,R4,R0,LSR#8
+
+    ; Swap endian (height)
+    ;REV     R5,R5                        ; ARMv6
+    EOR     R0,R5,R5,ROR#16
+    BIC     R0,R0,#&FF0000
+    MOV     R5,R5,ROR#8
+    EOR     R5,R5,R0,LSR#8
+
+
+;--------------------------- QOI validated ----------------------------------------------;
+
+    ; Calculate hourglass values (Divide Sprite height (in R5) by 100)
+    ; also enables Escape key if not creating a RISC OS 4 Module
+    ; and zero the Index array and insert starting pixel value into Index array
+    MOV     R0,R5
+    BL      init_hourglass                ; [in s.Hourglass_Index]
+
+
+;--------------------------- Create SCB -------------------------------------------------;
+; R4  = width in pixels
+; R5  = height in pixels
+; R6  = Sprite Control Block
+; R10 = QOI file handle
+; R11 = in_block
+; R12 = PhotoDesk workspace
+
+    LDR     R6,[R11]                      ; R6 = SCB
+
+    SUB     R0,R4,#1
+    SUB     R2,R5,#1
+    STR     R0,[R6,#scb_width]            ; Store width-1 in SCB
+    STR     R2,[R6,#scb_height]           ; Store height-1 in Sprite Control Block
+
+    MOV     R0,#24                        ; PhotoDesk Type 3 Sprite is 24 bpp (RGB)
+    STR     R0,[R6,#scb_bpp]              ; Store bpp in SCB
+
+    ; QOI files don't include DPI so get default DPI as specified by user
+    LDR     R0,[R11,#def_dpi]             ; Default DPI
+    ORR     R0,R0,R0,LSL#16               ; Make x and y DPI the same
+    STR     R0,[R6,#scb_dpi]              ; Store DPI in Sprite Control Block
+
+    MOV     R0,#2_1000                    ; Set VM with no squeak
+    STR     R0,[R11,#VM_Flags]            ; Store in in_block+140
+
+    MOV     R0,R11
+    MOV     R1,#17                        ; VMOp 17 to create SCB
+    MOV     R2,#3                         ; PhotoDesk Sprite type (1, 3, or 4 = 8bpp, 24bpp, or CMYK)
+    ORR     R2,R2,#1:SHL:8                ; Add 1 Alpha ...
+    ORR     R2,R2,#1:SHL:30               ; and make it a virgin Alpha!
+    SWI     Photodesk_VMOp                ; On exit R0 = start of Alpha CCB
+
+    ; and prepare the mask ...
+    LDR     R1,[R0,#ccb_Flags]            ; Get Alpha CCB flags: R0+72
+    ORR     R1,R1,#2_11000                ; Put in a destructive VM request
+    STR     R1,[R0,#ccb_Flags]            ; Update Alpha CCB flags
+
+
+; R10 = QOI file handle
+; R11 = in_block
+; R12 = PhotoDesk workspace
+
+
+;--------------------------- Claim QOI buffer -------------------------------------------;
+
+    ; Claim buffer to load QOI file - see if we can load the whole file into memory
+
+    LDR     R3,[R12,#QOI_ChanColspc]
+    LDR     R2,[R11,#scratch]             ; Pointer to scratch buffer
+    MOV     R7,#scratchSize               ; Size of scratch buffer (64K)
+    MOV     R6,R2
+
+    ; If QOI file size <= scratchSize then just use the scratch buffer
+    ; else see if we can claim enough RMA for the whole file (R3) - if not then use scratch buffer as a cache
+    CMP     R3,R7
+    BLS     %FT01
+
+    MOV     R0,#6                         ; Claim R3 bytes of memory from RMA?
+    ; Size in R3
+    SWI     XOS_Module
+    ; Returns RMA block address in R2
+    ; If error claiming for whole file, try for half of file
+    MOVVS   R3,R3,LSR#1
+    SWIVS   XOS_Module
+    STRVC   R2,[R12,#rma_buffer]          ; Address of memory in RMA
+    MOVVC   R7,R3                         ; Size of buffer
+    MOVVC   R6,R2                         ; Buffer address in RMA
+    ; Error claiming block from RMA, so use scratch buffer
+    MOVVS   R2,R6
+01
+    STR     R2,[R12,#qoi_CacheAddr]       ; Address of cache for QOI
+    STR     R2,[R12,#qoi_CachePtr]        ; Address of where to read next byte
+    STR     R7,[R12,#cache_size]          ; Size of cache
+
+
+;--------------------------- Load whole QOI file into buffer ----------------------------;
+; R2  = Address of cache
+; R3  = QOI file size
+; R4  = width in pixels
+; R5  = height in pixels
+; R6  = R2
+; R7  = Size of cache
+; R8  = R3
+; R10 = QOI file handle
+; R11 = R4
+
+    ; If QOI file size <= Size of cache then read whole file (including Header) into buffer
+    CMP     R3,R7
+    BHI     %FT21
+
+    MOV     R11,R4                        ; Store R4 (width)
+
+    MOV     R8,R3                         ; Size of QOI file (including Header)
+    MOV     R1,R10                        ; File handle
+    MOV     R0,#4                         ; Read from current ptr
+    SWI     XOS_GBPB
+    BVS     returnErrorQS
+    ; On exit:
+    ; R2 = Ptr to end of data
+    ; R3 = Number of bytes not transferred
+    ; R4 = File ptr
+    SUB     R8,R8,R3
+    STR     R8,[R12,#qoi_CacheFree]         ; Update amount of data stored in cache
+
+    ; If Number of bytes not transferred <> 0 then will use buffer as a cache
+    ; else close file and set file handle = 0 to let qoi2spr know file is all in memory
+    CMP     R3,#0
+    MOVEQ   R0,#0                         ; Close file
+    SWIEQ   XOS_Find
+    STREQ   R3,[R12,#qoi_fhandle]
+
+    ; As whole file in memory then need to add the buffer address to qoiData% and chunks_len%
+    LDREQ   R0,[R12,#qoi_fptr]            ; qoiData%. Where we are in the QOI file (=start of QOI data)
+    LDREQ   R1,[R12,#qoi_DataEnd]         ; End of QOI data. chunks_len%
+    ADDEQ   R0,R0,R6
+    ADDEQ   R1,R1,R6
+    STREQ   R0,[R12,#qoi_fptr]
+    STREQ   R1,[R12,#qoi_DataEnd]
+
+    MOV     R4,R11                        ; Restore R4 (width)
+21
+
+;--------------------------- Process QOI chunks into Sprite pixels ----------------------;
+
+; R3  = Starting line
+; R4  = width in pixels
+; R5  = height in pixels
+; R11 = Number of lines required = Sprite Height
+
+    MOV     R3,#0                         ; R3 = Starting line
+    MOV     R11,R5                        ; Use height as down count in R11
+
+
+;--------------------------- VM loop ---------------------------;
+
+; R3  = Starting line for VM call
+; R4  = width in pixels
+; R6  = Number of lines to process
+; R11 = Number of lines required = Sprite Height
+; R12 = PhotoDesk workspace
+
+load_vm_loop
+
+    ; Claim VM to store Sprite lines ...
+    MOV     R0,R11                        ; R0 = Number of lines required
+    MOV     R1,R3                         ; R1 = Starting at this line
+    LDR     R2,[R12,#inblock]             ; R2 = in_block
+    SWI     Photodesk_VM
+    ; R0 = Number of lines that can be stored in the VM
+    ; R1 = Preserved
+    ; R2 = Preserved
+
+    ; Update R3 and R11 ready for next time round the loop ...
+    ADD     R3,R3,R0                      ; Starting line for next time we call VM
+    SUB     R11,R11,R0                    ; Number of lines left to process next time in Sprite
+
+    MOV     R6,R0                         ; R6 = Number of lines to process
+
+    ADD     R2,R2,#off_base               ; Start of plane pointers from inblock!off_base
+    LDMIA   R2,{R7,R8,R9,R10}             ; Addresses for Alpha/Mask,R,G,B planes
+
+
+load_spr_block                            ; Process a block of lines
+
+; Process QOI chunks until we have done R6 lines of Sprite data
+; R3  = Starting line for next time we call VM
+; R4  = Number of pixels in a line (=width)
+; R5  = Number of pixels left to process in the line (=width) [Decrementing]
+; R6  = Number of Sprite lines to fill
+; R11 = Number of lines left to process in Sprite
+; R12 = PhotoDesk workspace
+
+    MOV     R5,R4                         ; Number of Sprite pixels in this line
+
+load_spr_line                             ; Process a line
+
+; Process QOI chunks until we have done a line of Sprite data
+; R0  = Sprite pixel in &AABBGGRR format
+; R1  = If non-zero then processing a Run chunk
+; R3  = Starting line for next time we call VM
+; R4  = Number of pixels in a line (=width)
+; R5  = Number of pixels left to process in the line (=width) [Decrementing]
+; R6  = Number of Sprite lines to fill
+; R7-R10 = Start address of RGBA planes
+; R11 = Number of lines left to process in Sprite
+; R12 = PhotoDesk workspace
+; R14 = Available after call to: BL qoi2spr
+
+
+    ; Read a QOI chunk, returning Sprite pixel (&AABBGGRR)
+    BL      qoi2spr
+
+    ; On exit: R0 = Sprite pixel or Error block, R1 = -1, 0, 1..61
+    ; If R1 = -1 then error from qoi2spr
+    CMN     R1,#1                         ; -1
+    BEQ     returnErrorQS                 ; and exit, R0 = Ptr to error block
+
+    ; Store pixel in R0 in individual planes but keep R0 in case we're doing a Run chunk ...
+    STRB    R0,[R8],#1                    ; Write Red byte
+    MOV     R2,R0,LSR#8                   ; Green value
+    STRB    R2,[R9],#1                    ; Write Green byte
+    MOV     R2,R0,LSR#16                  ; Blue value
+    STRB    R2,[R10],#1                   ; Write Blue byte
+    MOV     R2,R0,LSR#24                  ; Alpha/Mask value
+    STRB    R2,[R7],#1                    ; Write Alpha/Mask byte
+
+    SUBS    R5,R5,#1
+
+    ; Optmised routine to process Run chunks
+    ; If in a run then don't call qoi2spr just use same R0 value
+
+    BEQ     %FT79                         ; Finshed this line, go and see if more lines to do
+
+    ; More of this line to do, so see if Run (R1<>0) then process a Run chunk else (R1=0) go get next chunk
+    CMP     R1,#0
+    BEQ     load_spr_line                 ; Go get next chunk from QOI file
+
+    ; Process a Run chunk. R1 = Number of pixels to write to this line
+    CMP     R1,R5                         ; If R1 > R5 then just do R5 pixels to finish the line else can do R1 pixels
+    MOVHI   R1,R5
+
+    LDR     R2,[R12,#qoi_RunCount]
+    SUB     R2,R2,R1                      ; Update Run count in qoiDataBlock
+    STR     R2,[R12,#qoi_RunCount]
+    SUB     R5,R5,R1                      ; Update number of pixels left in this line
+71
+    ; Store pixel in R0 in individual planes ...
+    STRB    R0,[R8],#1                    ; Write Red byte
+    MOV     R2,R0,LSR#8                   ; Green value
+    STRB    R2,[R9],#1                    ; Write Green byte
+    MOV     R2,R0,LSR#16                  ; Blue value
+    STRB    R2,[R10],#1                   ; Write Blue byte
+    MOV     R2,R0,LSR#24                  ; Alpha/Mask value
+    STRB    R2,[R7],#1                    ; Write Alpha/Mask byte
+
+    SUBS    R1,R1,#1
+    BNE     %BT71                         ; Go store next Run pixel
+
+    ; Done R1 pixels
+    ; We might have processed all the Run, or come to the end of the line with more Run to process, or both!
+
+    CMP     R5,#0
+    BNE     load_spr_line                 ; Not finished with this line, so go get next chunk from QOI file
+
+    ; Finshed this line, go and see if more lines to do
+79
+
+
+;--------------------------- Another line complete ---------------------------;
+
+    ; Check for Escape key
+
+    ; In WIMP, the Escape key is disabled and so OS_ReadEscapeState always returns with C clear
+    ; which is why we enable Escape key with OS_Byte 229,0 at the start
+    SWI     OS_ReadEscapeState            ; C is set if Escape has been pressed
+    ADRCSL  R0,err_escLoad
+    BCS     returnErrorQS
+
+    ; and update Hourglass
+
+    LDR     R0,[R12,#hg_onepcentcount]    ; The current 1% row count (Decreasing)
+    SUBS    R5,R0,#1                      ; Done another row
+    STRNE   R5,[R12,#hg_onepcentcount]    ; Current 1% row count not reached 0
+    ; Once reach 0 reset the 1% row count and increment the Percentage display
+    LDREQ   R0,[R12,#hg_pcent]            ; Percent value to show (0..99)
+    LDREQ   R5,[R12,#hg_onepcent]         ; Number of rows that represents 1%
+    ADDEQ   R0,R0,#1                      ; Next %
+    STREQ   R0,[R12,#hg_pcent]
+    STREQ   R5,[R12,#hg_onepcentcount]    ; Reset current 1% row count
+    SWIEQ   XHourglass_Percentage
+
+    ; Done all lines yet?
+    SUBS    R6,R6,#1
+    BHI     load_spr_block                ; Process next line
+
+    ; Have filled the VM, so update thumbnail
+    MOV     R0,#0
+    LDR     R1,[R12,#inblock]             ; in_block
+    SWI     Photodesk_Thumbnail
+
+; R3  = Starting line for next time we call VM
+; R11 = Number of lines left to process in Sprite
+
+; Have we done all the lines in the Sprite (R11 = 0)?
+
+    TEQ     R11,#0
+    BNE     load_vm_loop                  ; Get next block of lines
+
+
+;--------------------------- All done, so exit ---------------------------;
+
+    ADRL    R0,qoi_info                   ; Point to info string
+
+    ; Drop through to load_exit
+
+
+;--------------------------- Common exit point... ---------------------------;
+
+
+load_exit
+
+returnErrorQS                             ; Handle errors here
+
+    MOV     R10,R0                        ; Store load status
+
+    ; Close QOI file
+    LDR     R1,[R12,#qoi_fhandle]
+    CMP     R1,#0
+    MOVNE   R0,#0
+    SWINE   XOS_Find
+
+    ; Release RMA buffer if claimed
+    LDR     R2,[R12,#rma_buffer]          ; Zero means: Using scratch buffer else Address in RMA
+    CMP     R2,#0
+    MOVNE   R0,#7
+    SWINE   XOS_Module
+
+    ; Check for Escape pressed in case we missed it
+    SWI     OS_ReadEscapeState            ; C is set if Escape has been pressed
+    MOVCS   R0,#124                       ; If so, then call OS_Byte 124 to clear Esc condition
+    SWICS   OS_Byte
+
+    ; Restore Escape conditions to when we started
+    MOV     R0,#229
+    LDR     R1,[R12,#esc_state]           ; Current state (0=Enabled, <>0=Disabled)
+    MOV     R2,#0
+    SWI     OS_Byte
+
+    SWI     XHourglass_Off
+
+    MOV     R0,R10                        ; Restore load status
+
+    LDMFD   R13!,{R1-R12,PC}              ; and exit back to PhotoDesk
+
+
+    END
+

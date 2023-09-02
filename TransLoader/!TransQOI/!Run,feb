@@ -1,0 +1,16 @@
+| QOI TransLoader
+| !Run
+
+Run <Obey$Dir>.!Boot
+
+| Options: [-da <N>] [-mask1 | -mask8 | -alpha] [-clean] [-autoOpts] [-ex <N>] [-ey <N>]
+
+| pre-RISC OS 5
+Set TransLoader$Tail -mask1 -clean
+| RISC OS 5
+If "<Boot$OSVersion>" >= "500" Then Set TransLoader$Tail -alpha -clean
+| RISC OS 6
+If "<Boot$OSVersion>" >= "600" Then Set TransLoader$Tail -mask8 -clean
+
+WimpSlot -min 32K -max 32K
+Run <Obey$Dir>.!Server

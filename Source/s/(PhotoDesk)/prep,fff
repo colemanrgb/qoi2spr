@@ -1,0 +1,36 @@
+; Prepare SaveAs window
+;==================================================================================================
+
+;--------------------------- Prepare icons in SaveAs window ---------------------;
+
+prepare_save    FunctionSig
+
+; On entry:
+; R0 = SCB of image being saved
+; R1 = in_block
+; R2 = 0
+; R3 = SaveAs window handle
+
+; On exit:
+; All registers preserved
+
+
+    STMFD   R13!,{R0-R11,R14}
+
+    LDR     R1,[R1,#wimp_pollBlock]       ; Use Wimp Poll block to store icon data
+    STR     R3,[R1,#0]                    ; SaveAs window handle
+    SWI     Wimp_GetWindowInfo
+    LDR     R2,[R1,#4+84]                 ; Number of icons in SaveAs window
+    LDR     R8,[R1,#4+0]                  ; Visible min x will be overwritten by call to Wimp_DeleteIcon
+
+01
+    CMP     R2,#6                         ; Remove any icons above icon 5, starting at highest icon number
+    LDMLSFD R13!,{R0-R11,PC}              ; If no extra icons to add then exit here
+    SUB     R2,R2,#1
+    STR     R2,[R1,#4]                    ; Overwrites window's Visible min x
+    SWI     Wimp_DeleteIcon
+    B       %BT01
+
+
+    END
+

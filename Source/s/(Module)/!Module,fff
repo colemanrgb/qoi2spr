@@ -1,0 +1,435 @@
+; QOI to Sprite converter for RISC OS 4 Image File Converter
+;==================================================================================================
+
+; Based on ConvertStar3000 by Chris Bazley
+
+; Other files are loaded at the end of this file
+
+;    OPT     1+8192                        ; Turn on normal listing + Turn off listing conditional directives
+
+; Define the type of file we're producing ...
+                                           ; These don't need a value, just need them to be defined
+                                          ;GBLL    PHOTODESK
+                                          ;GBLL    APP
+                                          GBLL    RO4_MODULE
+
+
+    GET     s.Hdr                         ; SWI numbers, Macros, and QOI constants
+
+
+    ; Workspace is claimed from RMA and initialised in Module_Init
+
+
+;==================================================================================================
+
+    AREA    |!!Module$$Code|, CODE, READONLY
+
+
+    ENTRY
+
+
+Module_Header
+    DCD     0                                                       ; Start offset
+    DCD     Module_Init                   - Module_Header           ; Initialisation offset
+    DCD     Module_Finalise               - Module_Header           ; Finalisation offset
+    DCD     Module_ServiceCall_Handler    - Module_Header           ; Service Call handler offset
+    DCD     Module_Title                  - Module_Header           ; Title string offset
+    DCD     Module_HelpVerStr             - Module_Header           ; Help/Version string offset
+    DCD     0                                                       ; Help and command keyword table offset
+    DCD     0                                                       ; SWI chunk base number
+    DCD     0                                                       ; SWI handler code offset
+    DCD     0                                                       ; SWI decoding table offset
+    DCD     0                                                       ; SWI decoding code offset
+    DCD     0                                                       ; MessageTrans file (not 26bit)
+    DCD     Module_Flags                  - Module_Header           ; Module Flags      (not 26bit)
+
+    ; These can't be empty strings
+    ASSERT  ("$PROG_NAME"   <> "")
+    ASSERT  ("$PROG_VERS"   <> "")
+    ASSERT  ("$PROG_DATE"   <> "")
+    ASSERT  ("$PROG_AUTHOR" <> "")
+
+Module_Title                              ; Module Title (Alpha-numeric characters, no spaces or ctrl characters)
+    DCB     "$PROG_NAME",0
+
+; Module Help String - no ctrl characters except 9 (to tab to next 8 byte column) or 31 (hard space)
+Module_HelpVerStr                         ; Module Help String "<name><tab><version x.xx> (DD MMM YYYY)"
+                                          ;       <tab> is one or two tabs to align version to column 16
+  IF (:LEN:"$PROG_NAME") > 15
+    ! 0, "*******  WARNING: Module name '$PROG_NAME' truncated to 15 characters"
+    DCB     "$PROG_NAME":LEFT:15
+  ELSE
+    DCB     "$PROG_NAME"
+  ENDIF
+
+  IF (:LEN:"$PROG_NAME") < 8
+    DCB     9                             ; Add an extra tab to put version to column 16
+  ENDIF
+
+    DCB     9, "$PROG_VERS ($PROG_DATE) © $PROG_AUTHOR", 0
+
+    ALIGN                                 ; Make sure we are aligned after strings
+
+
+Module_Flags
+  IF {CONFIG} = 32
+    DCD     &1                            ; Module flags word (1 = 32bit)
+  ELSE
+    DCD     &0                            ; Module flags word (0 = 26bit)
+  ENDIF
+
+
+
+ServiceCall_Table
+    DCD     0                                                       ; Service Call Flags word
+    DCD     ServiceCall_RO4_EntryPoint    - Module_Header           ; Address of RO4 Service Call entry point
+
+    ; Service Calls that I'm interested in - must be in ascending order
+    DCD     Service_TaskManagerAcknowledgements                     ; Service Call &42680
+    DCD     Service_ImageFileConvert_Started                        ; Service Call &80D60
+    DCD     Service_ImageFileConvert_Dying                          ; Service Call &80D61
+    ;DCD     Service_ImageFileConvert_ConverterChanged               ; Service Call &80D62 - NOT USED
+
+    ; End of Service Call Table
+    DCD     0
+    ; Offset to Service Table, must be just before Module_ServiceCall_Handler
+    DCD     ServiceCall_Table             - Module_Header
+
+
+Module_ServiceCall_Handler
+
+; On Entry:
+; R1  = Service Call number
+; R12 = pointer to workspace
+; R0,R2-R8 depend on Service Call
+
+; On Exit:
+; Need to preserve all registers, except R12, unless Service Call is claimed (by setting R1 = 0)
+; If call claimed (by setting R1 = 0) then can alter R0,R2-R8
+
+; Need to store R14 as calling SWIs corrupt it (we're in SVC mode)
+
+    MOV     R0,R0                         ; Entry Point for Service Call handler code (Magic word)
+    ; If can put Service Call numbers as constants then can just do:
+    ;    TEQ    R1,#ServiceCall_80D60
+    ;    TEQNE  R1,#ServiceCall_80D61
+    ;    ;TEQNE  R1,#ServiceCall_80D62
+    ;    MOVNE  PC,R14
+
+    ; R1 = &42680 - First Service number Service_TaskManagerAcknowledgements
+    EOR     R1,R1,#&40000
+    TEQ     R1,#&2680
+    EOR     R1,R1,#&40000
+    ; R1 = &80D60 - Second Service number ImageFileConvert_Started
+    ; R1 = &80D61 - Third  Service number ImageFileConvert_Dying
+    ; R1 = &80D62 - Fourth Service number ImageFileConvert_ConverterChanged
+    EOR     R1,R1,#&80000
+    EOR     R1,R1,#&D00
+    TEQNE   R1,#&60
+    TEQNE   R1,#&61
+    ;TEQNE   R1,#&62
+    EOR     R1,R1,#&D00
+    EOR     R1,R1,#&80000
+    MOVNE   PC,R14                        ; Exit if not a Service Call I'm interested in
+
+    ; Drop through to ServiceCall_RO4_EntryPoint
+
+
+ServiceCall_RO4_EntryPoint
+
+; Come here from either Module_ServiceCall_Handler or via RO4 Service Call handler
+; either way we know Service Call is one we want &80D60 or &80D61
+
+; On Entry:
+; R0  = API version (100)
+; R1  = Service call number
+;;   For Service Call &80D62 ImageFileConvert_ConverterChanged:
+;;     R2  = Filetype pairs
+;;     R3  = 0 or 1 (0 = A Converter has been Deregistered, 1 = A Converter has been Registered ??)
+; R12 = pointer to workspace
+
+; On Exit:
+; Need to preserve all registers, except R12, unless Service Call is claimed (by setting R1 = 0)
+; If call claimed (by setting R1 = 0) then can alter R0,R2-R8
+
+; Need to store R14 as calling SWIs corrupt it (we're in SVC mode)
+
+    STMFD   R13!,{R0-R9,R14}              ; Entry Point for RO4 Service Call handler. Preserve registers we're using
+    LDR     R12,[R12]
+    MOV     R0,#0
+
+    ; R1 = &42680 - First Service number Service_TaskManagerAcknowledgements
+    CMP     R1,#&80000
+    BLO     ServiceCall_GetCredits
+
+    ; R1 = &80D60 - Second Service number ImageFileConvert_Started
+    ; R1 = &80D61 - Third  Service number ImageFileConvert_Dying
+    ; R1 = &80D62 - Fourth Service number ImageFileConvert_ConverterChanged
+    SUB     R1,R1,#&80000
+    SUBS    R1,R1,#&D60                   ; R1 = 0 or 1
+
+    ; NE = ImageFileConvert_Dying
+    ; Store flag to say that we aren't registered with ImageFileConverter
+    STRNE   R0,[R12,#IFC_Registered]      ; Set registered = 0
+    LDMNEFD R13!,{R0-R9,PC}
+
+    ; &80D60 ImageFileConvert_Started, so register handlers
+    BL      IFC_Register_Handlers         ; Uses registers R0-R9 (R0 must = 0 on entry to IFC_Register_Handles)
+
+    LDMFD   R13!,{R0-R9,PC}
+
+
+ModInit_Error_NeedMod
+    DCD     0                             ; Error block used if ImageFileConvert not loaded:
+    DCB     "NeedMod",0                   ;    "Module %0 cannot start without module %1"
+
+ModInit_RMEnsure_IFC
+    DCB     "ImageFileConvert",0          ; Need to make sure this module is loaded
+
+    ALIGN                                 ; Make sure we are aligned after strings
+
+
+Module_Init    FunctionSig
+
+; Initialise is entry point for RMLoad or RMRun (before calling Start) or ReInit or after RMTidy
+
+; On Entry:
+; R10 = Environment string (Initialisation parameters supplied by caller of OS_Module 1)
+; R11 = 0 (Loaded from disc or RAM),
+;       >&3000000 (Loaded from expansion card, R11 = Podule base address),
+;       else this is a new instantiation, there are R11 other incarnations
+; R12 = Pointer to workspace for this instantiation
+;       If <> 0 then we've already been initialised and we are being re-initialised after a non-fatal finalisation (RMTidy)
+
+; On Exit:
+; Need to preserve R7-R11
+
+; Our own SWIs and *Commands aren't recognised at this point
+; Need to store R14 as calling SWIs corrupt it (we're in SVC mode)
+; Do not generate errors - use only X SWIs
+; To stop module being initilaised return with V set and R0 pointing to error block. In this case the Finalisation code does not get called
+
+    STMFD   R13!,{R7-R9,R14}
+
+    ; Calls IFC_Register_Handlers which uses registers R0-R9
+
+    ; Check for presence of the ImageFileConvert module, return error if not there
+    MOV     R0,#18
+    ADR     R1,ModInit_RMEnsure_IFC
+    SWI     XOS_Module
+    ; Report Module not loaded
+    ADRVS   R0,ModInit_Error_NeedMod
+    MOVVS   R1,#0
+    MOVVS   R2,#0
+    MOVVS   R3,#0
+    ADRVS   R4,Module_Title               ; This Module's title
+    ADRVS   R5,ModInit_RMEnsure_IFC       ; Module we need loaded "ImageFileConvert"
+    SWIVS   XMessageTrans_ErrorLookup
+    LDMVSFD R13!,{R7-R9,PC}               ; Exit, R0 points to error buffer
+
+    ; Claim some workspace
+    LDR     R2,[R12]                      ; Have we already got workspace?
+    CMP     R2,#0
+    BNE     Module_Init_WS                ; yes so skip
+
+    MOV     R0,#6
+    MOV     R3,#WSPACE_SIZE:AND:&FF00
+    ADD     R3,R3,#WSPACE_SIZE:AND:&00FF
+    SWI     XOS_Module
+    ; On error, exit
+    LDMVSFD R13!,{R7-R9,PC}               ; Exit, R0 points to error block
+
+    STR     R2,[R12]                      ; Set pointer to workspace (in R12) to workspace in R2
+
+    ; Drop through to initialise Module Workspace
+
+Module_Init_WS
+
+    ; Initialise our workspace
+    MOV     R12,R2
+    ; Find out what RISC OS version we're running on - only care about the major version: 3, 4, 5 or 6
+    MOV     R0,#129
+    MOV     R1,#0
+    MOV     R2,#&FF
+    SWI     OS_Byte
+    SUB     R1,R1,#&A5
+    CMP     R1,#3
+    MOVLT   R1,#3                         ; Treat RISC OS 4.0X and earlier as RISC OS 3 (R1 = 3)
+    CMP     R1,#4                         ; RISC OS 4.3X (Select 2-3) and RISC OS 6.X (Select 4) both return OS value &A9 (R1 = 4)
+    BNE     %FT01
+    MOV     R0,#10                        ; ReadSysInfo 10 implemented in RISC OS 6.06 (Select 4i2)
+    SWI     XOS_ReadSysInfo               ; 8bpp Mask actually implemented in RISC OS 4.37 (Select 3i2)
+    MOVVC   R1,#6
+
+01
+    STR     R1,[R12,#IFC_RISCOS]          ; RISC OS version (3,4,5,6)
+
+    MOV     R0,#0                         ; Only zero those entries that need to be zeroed
+    STR     R0,[R12,#rma_buffer]          ; 0 = No memory claimed from RMA for buffer
+    STR     R0,[R12,#IFC_Registered]      ; 0 = Not registered with IFC yet
+    STR     R0,[R12,#qoi_fhandle]         ; QOI file handle
+    STR     R0,[R12,#spr_fhandle]         ; Sprite file handle
+
+    ; Add QOI file magic identifier into workspace ...
+    ADRL    R1,workspace
+    LDR     R1,[R1]
+    STR     R1,[R12,#QOI_Magic]           ; "qoif"
+
+    ; Register with ImageFileConvert (R0 must = 0 on entry to IFC_Register_Handles)
+    BL      IFC_Register_Handlers         ; Uses registers R0-R9
+
+    ; Notify TaskManager we have a Copyright message
+    MOV     R1,#&40000
+    ADD     R1,R1,#&2680
+    MOV     R2,#0
+    SWI     XOS_ServiceCall
+
+    LDMFD   R13!,{R7-R9,PC}
+
+
+; ImageFileConverter Conversions
+IFC_FTypesConvert_Qoi2Spr
+    DCD     &0A610FF9                     ; ImageFileConverter Filetypes (Source, Destination): &A61 = QOI, &FF9 = Sprite
+
+IFC_FTypesConvert_Spr2Qoi
+    DCD     &0FF90A61                     ; ImageFileConverter Filetypes (Source, Destination): &FF9 = Sprite, &A61 = QOI
+
+
+
+IFC_Register_Handlers    FunctionSig
+
+; Called from Module_ServiceCall_Handler and Module_Init
+
+; R0 must = 0 on entry
+
+; Uses registers R0-R9
+; Need to store R14 as calling SWIs corrupt it (we're in SVC mode)
+; Need to register a handler for each Conversion type
+; Flags: V will be set if SWI errors
+
+    MOV     R9,R14
+    SUB     R13,R13,#28                   ; Make space on stack for pointer to definition in R1
+
+    ; Register QOI -> Sprite
+    MOV     R1,R13
+    MOV     R2,#100                       ; R1 +0 API version (100)
+    MOV     R3,#0                         ; R1 +4 Converter flags
+    LDR     R4,IFC_FTypesConvert_Qoi2Spr  ; R1 +8 Filetypes (Source, Destination): &A61 = QOI, &FF9 = Sprite
+    ADR     R5,IFC_ModuleInfo             ; R1 +12 Pointer to name of converter
+    MOV     R6,R12                        ; R1 +16 Workspace value for R12
+    ADRL    R7,IFC_Convert_Qoi2Spr        ; R1 +20 Pointer to Conversion routine
+    ADRL    R8,IFC_MiscOp                 ; R1 +24 Pointer to MiscOp routine
+    STMIA   R1,{R2-R8}                    ; Put them on the stack for SWI to read
+    SWI     XImageFileConvert_Register    ; On exit, R1 = API version even on error, all other registers preserved
+    STRVC   R1,[R12,#IFC_Registered]      ; V clear, set registered <> 0
+
+    ; Register Sprite -> QOI
+    MOVVC   R1,R13
+    LDRVC   R4,IFC_FTypesConvert_Spr2Qoi  ; R1 +8 Filetypes (Source, Destination): &FF9 = Sprite, &A61 = QOI
+    ADRVCL  R7,IFC_Convert_Spr2Qoi        ; R1 +20 Pointer to Conversion routine
+    STMVCIA R1,{R2-R8}                    ; Put them on the stack for SWI to read
+    SWIVC   XImageFileConvert_Register    ; On exit, R1 = API version, all other registers preserved
+
+    ADD     R13,R13,#28                   ; Reset stack
+    MOV     PC,R9
+
+
+IFC_ModuleInfo                            ; Image File Convert registration name in form:
+                                          ;       "<name><tab><version x.xx><tab><author>"
+    DCB     "$PROG_NAME",9,"$PROG_VERS",9,"$PROG_AUTHOR",0
+    ALIGN                                 ; Make sure we are aligned after strings
+
+
+Module_Finalise    FunctionSig
+
+; Finalise is entry point for ReInit, RMKill, RMTidy, RMClear, and also when a module of the same name is loaded and the old one is killed
+; Module is not active during a finalisation call and so cannot call our own SWIs or *Commands
+; If exit with error (R0 points to error block and V set) then module refuses to die. If module generates an error then it remains in the RMA and is assumed to be initialised. The only way to remove a module in this state is via a hard-reset
+
+; On Entry:
+; R10 = 0 non-fatal (RMTidy), =1 fatal (RMKill). RO5 is always 1
+; R11 = instantiation number
+; R12 = pointer to workspace
+
+; On Exit:
+; Need to preserve R7-R11
+; Once workspace freed, then set workspace pointer (stored in R12) = 0
+
+; If no finalisation code then system frees any workspace pointed to by R12 and sets workspace pointer in R12 = 0
+
+    MOV     R5,R14                        ; Need to store R14 as calling SWIs corrupt it (we're in SVC mode)
+
+    ; Check if we are registered (R0 <> 0), if so then we need to deregister
+    LDR     R4,[R12]
+    CMP     R4,#0
+    BEQ     %FT90                         ; No workspace to free
+    LDR     R0,[R4,#0]
+    CMP     R0,#0
+
+    ; Deregister QOI -> Sprite
+    MOVNE   R0,#0                         ; Flags
+    LDRNE   R1,IFC_FTypesConvert_Qoi2Spr  ; Filetypes &A61 = QOI, &FF9 = Sprite
+    ADRNE   R2,IFC_ModuleInfo             ; Pointer to name of converter
+    SWINE   XImageFileConvert_Deregister  ; Ignore any error. On exit all registers preserved
+
+    ; Deregister Sprite -> QOI
+    LDRNE   R1,IFC_FTypesConvert_Spr2Qoi  ; Filetypes &FF9 = Sprite, &A61 = QOI
+    SWINE   XImageFileConvert_Deregister  ; Ignore any error. On exit all registers preserved
+
+    ; Free workspace (Address of workspace in R4)
+    MOV     R0,#7
+    MOV     R2,R4
+    SWI     XOS_Module
+    MOV     R2,#0
+    STR     R2,[R12]                      ; Set pointer to workspace (in R12) to 0
+
+90
+    ; Notify TaskManager our Copyright message is no longer available
+    MOV     R1,#&40000
+    ADD     R1,R1,#&2680
+    MOV     R2,#0
+    SWI     XOS_ServiceCall
+
+    ; Make sure V flag is clear to ensure module dies
+    CMP     PC,#0
+    MOV     PC,R5
+
+
+ServiceCall_GetCredits    FunctionSig
+    MOVS    R5,R2                         ; Exit if R2 = 0
+    BEQ     %FT20
+    MOV     R0,#&2000                     ; Use Group ID 2 so we fit in with the other Convert modules
+    ADRL    R1,Module_Title
+    ADR     R2,Module_Copyright           ; Copyright message
+    MOV     R14,PC                        ; Set return address
+    MOV     PC,R5                         ; Jump to code to add copyright message
+    MOV     R0,R0                         ; Returns here
+    LDMFD   R13!,{R0-R9,PC}
+20
+    CMN     PC,#0                         ; Clear flags (Sets N if PC is -ve)
+    LDMFD   R13!,{R0-R9,PC}
+
+Module_Copyright
+    DCB     "Copyright © ":CC:("$PROG_DATE":RIGHT:4):CC:" $PROG_AUTHOR.",10
+    DCB     "This software is based in part on work by Dominic Szablewski.",10
+    DCB     "Website: https://qoiformat.org/",0
+    ALIGN
+
+
+;============================== Conversion routines =============================;
+
+    GET     s.Hourglass_Index             ; Initialise hourglass percentage values and fills Index array with zeroes and inserts
+                                          ; starting pixel value
+    GET     s.(Module).IFC_MiscOp         ; Handles MiscOp SWI
+
+    GET     s.(Module).IFC_Qoi2Spr        ; Handles Convert SWI going from QOI to Sprite
+    GET     s.WriteMask                   ; Stores the Mask/Alpha byte
+    GET     s.qoi2spr                     ; Converts QOI chunk to RGBA value
+
+    GET     s.(Module).IFC_Spr2Qoi        ; Handles Convert SWI going from Sprite to QOI
+    GET     s.ProcessSpr                  ; Process Sprite pixels into QOI chunks
+    GET     s.spr2qoi                     ; Converts RGBA value to a QOI chunk. Includes writeFooter
+
+
+    END
+

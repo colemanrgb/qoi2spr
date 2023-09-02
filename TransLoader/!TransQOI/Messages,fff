@@ -1,0 +1,11 @@
+# !TransQOI by Richard Coleman
+ServerName:TransQOI
+Command:<TransQOI$Dir>.!Convert
+# output type should be a hex number with no leading '&' or anything
+OutputType:ff9
+# put null for this next one and nothing will be appended to the command
+# any system variable can be used ...
+TailVar:TransLoader$Tail
+# Error variable, comment out if not used
+Result:TransQOI$Failure
+# end of messages file

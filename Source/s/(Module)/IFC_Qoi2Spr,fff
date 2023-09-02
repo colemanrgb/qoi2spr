@@ -1,0 +1,689 @@
+; Load QOI file as a 24bpp Sprite (Type 6)
+;==================================================================================================
+
+
+IFC_Convert_Error    FunctionSig          ; Exit on error, resetting Escape key, and turning Hourglass off
+                                          ; On entry: R0 = Ptr to error block or error number
+
+;    MOV     R3,R0                         ; Preserve R0
+;    ; Check for Escape pressed in case we missed it
+;    SWI     OS_ReadEscapeState            ; C is set if Escape has been pressed
+;    MOVCS   R0,#124                       ; If so, then call OS_Byte 124 to clear Esc condition
+;    SWICS   OS_Byte
+;
+;    ; Restore Escape conditions to when we started
+;    MOV     R0,#229
+;    LDR     R1,[R12,#esc_state]           ; Current state (0=Enabled, <>0=Disabled)
+;    MOV     R2,#0
+;    SWI     OS_Byte
+;
+;    MOV     R0,R3                         ; Restore R0
+
+    SWI     XHourglass_Off
+
+    ; Set V
+    CMP     PC,#1<<31
+  IF {CONFIG} = 32
+    CMNVC   PC,#1<<31                     ; Needed for 32bit, no effect in 26bit
+  ENDIF
+
+    LDMFD   R13!,{R1-R11,PC}              ; Restore entry registers
+
+
+;err_escLoad
+;    DCD     69
+;    DCB     "Load aborted!",0
+;    ALIGN
+
+
+IFC_Convert_Qoi2Spr    FunctionSig              ; Conversion routine QOI -> Sprite
+
+; On Entry:
+;   R0  = Flags:
+;               Bit 0    0 = Create a Sprite file, 1 = Create a Sprite
+;               Bits 16-19 = mask size:
+;                        0 = Select mask based on number of channels (4 channels = mask, 3 = no mask)
+;                            RISC OS 4 and earlier uses a 1 bpp mask, otherwise 8 bpp mask. Sets bit 22 if mask selected
+;                        1 = 1bpp mask
+;                        8 = 8bpp mask
+;                       15 = No mask
+;               Bit 20:  1 = Use RISC OS 5 Alpha channel instead of mask (bits 16-19 must = 0)
+;               Bit 21:  0 = Reserved, must be 0 on entry
+;                            (Used to store number of channels: 0 = 3 channels, 1 = 4 channels)
+;               Bit 22:  1 = Remove unused mask. If all the mask bits are solid then the mask will be removed from the Sprite.
+;                            If bit 20 is set (use Alpha channel) then the Alpha channel will only be created if the QOI file
+;                            has 4 channels.
+;                            If select mask specified (Bits 16-19 = 0) then this bit will be set if a mask is selected
+;               Bit 23:  0 = use 90 DPI for X and Y
+;                        1 = use DPI/eigen values in R7 and R8
+;                            (invalid values in R7 and R8 use default of 90 DPI)
+;               All other bits reserved (see SWI documentation for details)
+;   R1  = Filetype pair (&A610FF9)
+;   R2  = Pointer to QOI image data
+;   R3  = Length of QOI image data
+;   R4  = Pointer to buffer to store Sprite image, or 0 to read size required
+;   R5  = Size of buffer in R4, or 0 to read size required
+;   R6  = Background colour to use, or -1 for default (not used)
+;   R7  = x DPI (180, 90, 45 or 22) or eigen value (0, 1, 2, 3)
+;   R8  = y DPI                   = "" =
+;         Invalid values in R7 and R8 use default of 90 DPI (eigen 1)
+;   R9  = Sprite name to use (Defaults to "qoi")
+;   R12 = Pointer to workspace
+
+; On Exit (V clear):
+;   R5  = If R4 = 0 or R5 = 0 on entry then R5 = size of output image buffer required
+;         otherwise R5 = size of output image buffer used
+;   Other registers preserved
+
+; On Exit (V set):
+;   R0  = Error code:
+;           1 = err_ConverterOutputBufferTooSmall ("Not enough space in output buffer")
+;           2 = err_ConverterBadFlags ("Bad flags set")
+;           5 = err_ConverterCorruptData ("ImageFile data is corrupt")
+;   Other registers preserved
+
+; Only get here if filetypes in R1 match mine and are correct for this routine.
+
+; Background value in R6 is not used, so can be set to whatever value you wish, though -1 makes a sensible default
+
+; When creating a Sprite (Bit 0 = 1) then 16 byte Sprite Area is not included
+; When creating a Sprite File (Bit 0 = 0) then the first Word of the Sprite Area is not included (Total size of Sprite area)
+;   so if just saving to file then save the buffer straight to the file
+;   If you want to use any OS_SpriteOps then you will need to add this first Word and set it to the Total size of Sprite area
+;      (returned in R5) (See example program)
+; R5 on exit may not equal R5 on entry as the mask maybe removed after the QOI file has been converted to a Sprite
+
+
+    STMFD   R13!,{R1-R11,R14}             ; Preserve entry registers
+
+    ; Store flags in R0 so can restore them on exit
+    STR     R0,[R12,#IFC_R0]
+
+    ; Show hourglass
+    MOV     R11,R0                        ; Preserve R0
+    MOV     R0,#50                        ; Delay displaying hourglass for half a second
+    SWI     XHourglass_Start
+    MOV     R0,R11                        ; Restore R0
+
+;    ; Enable Escape conditions
+;    STMFD   R13!,{R0-R2}
+;    MOV     R0,#229
+;    MOV     R1,#0
+;    MOV     R2,#255
+;    SWI     OS_Byte
+;    STR     R1,[R12,#esc_state]           ; Store Escape current state (0=Enabled, <>0=Disabled)
+;    LDMFD   R13!,{R0-R2}
+
+
+    ; Check bit 21 is clear
+    ANDS    R11,R0,#1:SHL:21              ; R11 <> 0 if bit 21 set
+    MOVNE   R0,#err_ConverterBadFlags     ; =2
+    BNE     IFC_Convert_Error
+
+    ; Check invalid flag combinations
+    MOV     R11,R0,LSR#16                 ; Mask values = 0, 1, 8, 15 in bits 16-19, shifted down to bits 0-3
+    AND     R10,R11,#&1F                  ; Check mask values, and that if alpha (bit 20 now bit 4) is set that mask = 0
+    CMP     R10,#0
+    CMPNE   R10,#1
+    CMPNE   R10,#8
+    CMPNE   R10,#15
+    CMPNE   R10,#16                       ; Just alpha bit set
+    MOVNE   R0,#err_ConverterBadFlags     ; =2
+    BNE     IFC_Convert_Error
+
+    ; If size of buffer (R5) = 0 then ensure R4 = 0
+    CMP     R5,#0
+    MOVEQ   R4,#0
+
+
+    ; Check DPI values passed in R7,R8 if bit 23 is set - and store as eigen values (0-3)
+    TST     R0,#1:SHL:23
+    MOVEQ   R7,#1                         ; Bit 7 not set so default to 90 dpi
+    MOVEQ   R8,#1
+    BEQ     %FT01
+
+    ; Bit 23 is set so check DPI values in R7,R8
+    ; Check x DPI and convert DPI to eigen
+    MOV     R6,#1                         ; Default to 90 dpi
+    CMP     R7,#180
+    MOVEQ   R6,#0
+    CMP     R7,#45
+    MOVEQ   R6,#2
+    CMP     R7,#22
+    MOVEQ   R6,#3
+    CMP     R7,#3                         ; User provided eigen values instead of DPI?
+    MOVHI   R7,R6                         ; No, (R7 > 3) so use eigen value in R6
+
+    ; Check y DPI and convert DPI to eigen
+    MOV     R6,#1                         ; Default to 90 dpi
+    CMP     R8,#180
+    MOVEQ   R6,#0
+    CMP     R8,#45
+    MOVEQ   R6,#2
+    CMP     R8,#22
+    MOVEQ   R6,#3
+    CMP     R8,#3                         ; User provided eigen values instead of DPI?
+    MOVHI   R8,R6                         ; No, (R8 > 3) so use eigen value in R6
+
+01
+
+; Registers available: R0,R1,R6,R9,R10,R14
+; R0 = flags, R2 = in buffer, R3 = in buffer size, R4 = out buff, R5 = out buff size, R7+R8 = eigen, R11 = Flags shifted to 0-7
+
+; Validate QOI header and extract image details
+; Error if width <= 0, height <= 0, channels < 3 or > 4, colspc > 1. channels and colspc are bytes so in range 0..255
+
+
+    STMFD   R13!,{R0,R2-R5}               ; Preserve registers
+
+
+    ; R9 = Pointer to Sprite name (ctrl character terminated)
+    MOV     R1,#0
+    ; Use Palette Buffer to hold Sprite name
+    ADD     R5,R12,#pal_buffer
+    STR     R1,[R5,#0]                    ; Zero the Sprite name buffer
+    STR     R1,[R5,#4]
+    STR     R1,[R5,#8]
+
+    CMP     R9,#&8000                     ; Does R9 point to a sprite name?
+    MOVLS   R9,#0
+    MOVHI   R0,R9
+    ADDHI   R1,R9,#13
+    SWIHI   OS_ValidateAddress            ; Check that memory block passed to us in R9 is valid (C flag is clear)
+    MOVCS   R9,#0
+
+    CMP     R9,#0
+12
+    ; No Sprite name provided so write default Sprite Name "qoi"
+    LDREQ   R0,[R12,#QOI_Magic]           ; = "qoif"
+    BICEQ   R0,R0,#&FF000000              ; = "qoi",0
+    STREQ   R0,[R5,#0]                    ; Store name in pal_buffer
+    BEQ     %FT11
+
+    ; Copy user supplied name, converting to lowercase
+    MOV     R1,#12                        ; Max length of sprite name
+01
+    LDRB    R0,[R9],#1
+    ; Lowercase characters A-Z in R0. Uses R4 just to set flag
+    CMP     R0,#"A"                       ; if R0 >= "A"
+    RSBHSS  R4,R0,#"Z"                    ; and "Z" >= R0
+    ADDHS   R0,R0,#32                     ; then make lowercase
+    CMP     R0,#127
+    MOVEQ   R0,#0                         ; Treat Backspace character as 0-terminator
+    CMP     R0,#32                        ; Have we reached terminator? (ctrl character)
+    MOVEQ   R0,#160                       ; replace space with non-breaking space
+    STRHSB  R0,[R5],#1                    ; No, so store character
+    SUBHSS  R1,R1,#1
+    BHS     %BT01
+
+    ; If empty name then use default
+    CMP     R1,#12
+    BEQ     %BT12
+
+11
+    ; Validate QOI
+    ; In:  R2 = QOI data addr, R3 = QOI data size
+    ; Out: R0 = width, R1 = height, R4 = 0 or 1 (3 or 4 channels). R2,R3,R5 corrupt
+
+    BL      validate_QOI                  ; [In s.(Module).IFC_MiscOp]
+
+    ADDVS   R13,R13,#20                   ; Reset stack instead of popping R0,R2-R5 otherwise we'll overwrite the error block in R0
+    BVS     IFC_Convert_Error             ; Exit on error
+
+
+    ; Store width and height in workspace
+    STR     R0,[R12,#QOI_Width]
+    STR     R1,[R12,#QOI_Height]
+
+    CMP     R4,#1
+    ORREQ   R11,R11,#1:SHL:5              ; If 4 channels then set bit 5 of R11
+
+    AND     R10,R11,#&0F                  ; R10 = mask value (= 0,1,8,15)
+
+    TST     R11,#1:SHL:4                  ; NE if bit 4 set (RISC OS 5 Alpha channel, not a mask)
+    BEQ     %FT08                         ; Bit 4 not set so see if we have a mask
+    TST     R11,#1:SHL:6                  ; NE if bit 6 set (Remove unused mask) remove Alpha if not have 4 channels
+    CMPNE   R4,#1                         ; 1 = 4 channels, 0 = 3 channels
+    BICNE   R11,R11,#2_1010000            ; 3 channels so clear bits 4 and 6 (No Alpha)
+
+    B       %FT03
+
+08
+    ; If mask = 0 then choose a mask, if 4 channels
+    CMP     R10,#15                       ; 15 = No mask
+    MOVEQ   R10,#0
+    BICEQ   R11,R11,#&0F
+    BEQ     %FT03
+
+    CMP     R10,#0                        ; 0 = Choose mask based on number of channels
+    ; Not 0 then either 1 or 8 so set 4 channels bit(5) in R11
+    ORRNE   R11,R11,#1:SHL:5
+    BNE     %FT03
+
+    ; Mask = 0
+    CMP     R4,#0                         ; If 3 channels then no mask
+    BEQ     %FT03
+
+    ; Mask = 0, channels = 4 - decide mask size based on RISC OS version
+    LDR     R9,[R12,#IFC_RISCOS]          ; RISC OS version (3,4,5,6)
+    CMP     R9,#5
+    MOVLO   R10,#1                        ; RISC OS 4 and below use a 1 bpp mask
+    MOVHS   R10,#8                        ; RISC OS 5 and 6 use an 8 bpp mask
+    ORR     R11,R11,R10
+    ORR     R11,R11,#1:SHL:6              ; And set bit 6: Remove unused mask
+
+03
+    MOV     R6,R1                         ; R6 = Height
+    MOV     R1,R0                         ; R1 = Width
+
+    LDMFD   R13!,{R0,R2-R5}               ; Restore registers
+
+    MOV     R14,R0                        ; Store flags word in R14
+
+; Here we:
+;   Calculate sprite size (image + mask)
+;   Create sprite
+;   Write data into qoiDataBlock
+;   Do conversion
+
+; Registers available: R0,R9
+; R2 = in buffer, R3 = in buffer size, R4 = out buff, R5 = out buff size, R7+R8 = eigen, R11 = Flags (R0) shifted to 0-7
+; R10 = mask bpp (0,1,8), R1 = width, R6 = height, R14 = Flags (R0)
+
+    CMP     R4,#0                         ; No buffer specified (R4 = 0) so return size required (R0)
+    BEQ     %FT04
+
+
+    ; Adjust start of Sprite buffer depending on whether we are creating a Sprite file (-4) or a Sprite (-16)
+    ; so we can access Sprite File header and Sprite header without too many changes
+
+    TST     R0,#1                         ; NE if bit 0 set
+    SUBNE   R4,R4,#sprFHdrSize            ; Create a Sprite: Adjust R4 to not include Sprite File Header (16 bytes)
+    SUBEQ   R4,R4,#4                      ; Create Sprite File: Adjust R4 to not include Total size of Sprite Area word
+
+    ; Write sprite type
+    TST     R11,#1:SHL:4                  ; Is RISC OS 5 alpha channel wanted? (NE if Bit 4 set)
+    ; Yes, so create RISC OS 5 Sprite mode word
+    MOVNE   R0,#(&0F:SHL:27)+1            ; (&0F << 27) + (6 << 20) + (1 << 15) + (EY% << 6) + (EX% << 4) + 1 (= &78608051)
+    ORRNE   R0,R0,#6:SHL:20
+    ORRNE   R0,R0,#1:SHL:15
+    ORRNE   R0,R0,R7,LSL#4                ; x DPI
+    ORRNE   R0,R0,R8,LSL#6                ; y DPI
+    ; No, so we create a RISC OS 3.5 Sprite mode word
+    MOVEQ   R0,#180
+    MOVEQ   R7,R0,LSR R7                  ; Convert eigen value into DPI
+    MOVEQ   R8,R0,LSR R8                  ; Convert eigen value into DPI
+    MOVEQ   R0,#(6:SHL:27)+1              ; (6 << 27) + (EY%) << 14) + (EX%) << 1) + 1 (= &301680B5)
+    ORREQ   R0,R0,R7,LSL#1                ; x DPI
+    ORREQ   R0,R0,R8,LSL#14               ; y DPI
+    ; 8 bit alpha mask wanted?
+    TST     R11,#1:SHL:3                  ; NE if bit 3 set
+    ORRNE   R0,R0,#1:SHL:31               ; then set bit 31 for wide mask
+
+    ; Store Sprite Type in Sprite Header
+    STR     R0,[R4,#(sprFHdrSize+40)]
+04
+    MOV     R7,R14
+
+; Registers available: R0,R8,R9,R14
+; R7 = Flags (R0)
+
+    ; Calculate mask size
+    CMP     R10,#1
+    MOVLO   R9,#0                         ; R9 = mask_width. 0 = no mask
+    ; 1 bpp mask
+    ADDEQ   R9,R1,#31                     ; mask width is multiple of 4 bytes (32 bits) in length
+    BICEQ   R9,R9,#31                     ; mask_width = (width + 31) AND (NOT(31))
+    MOVEQ   R9,R9,LSR#3                   ; mask_width DIV 8 to convert to bytes
+    ; 8 bpp mask
+    ADDHI   R9,R1,#3                      ; mask width is multiple of 4 bytes in length
+    BICHI   R9,R9,#3                      ; mask_width = (width + 3) AND (NOT(3))
+    ; R9 = mask size
+    MULHS   R9,R6,R9                      ; mask_size = height * mask_width
+
+    ; Calculate image size
+    MUL     R0,R1,R6                      ; width * height
+    MOV     R8,R0,LSL#2                   ; * 4
+
+    ; Sprite size (image + mask)
+    ADD     R0,R8,R9
+    ADD     R0,R0,#44                     ; +44 = Sprite Header size
+
+    ; When Creating a Sprite File need to add Sprite File Header to size of file
+    TST     R7,#1                         ; NE if R7 (R0) bit 0 set then don't include 16 byte Sprite File Header
+    ADDEQ   R0,R0,#(sprFHdrSize-4)        ; +16 = Sprite File Header size (-4 = Not include Total size of Sprite Area word)
+    ; R0 = size of Sprite buffer reqd
+
+    ; If R4 = 0 then return size
+    CMP     R4,#0                         ; No buffer specified (R4 = 0) so return size required (R0)
+    BEQ     IFC_Convert_Qoi2Spr_Exit
+
+    ; Check output buffer is big enough, if not error err_ConverterOutputBufferTooSmall(1)
+    CMP     R5,R0                                                   ; We have a buffer, is it large enough?
+    MOVLO   R0,#err_ConverterOutputBufferTooSmall                   ; =1
+    BLO     IFC_Convert_Error
+
+
+    ; Create Sprite Area in buffer (R4)
+    TST     R7,#1                         ; NE if R7 (R0) bit 0 set then don't include 16 byte Sprite File Header
+    ; Setup Sprite File Header
+    ADDEQ   R0,R0,#4                      ; Offsets in Sprite File Header and Sprite Header include the Total size word
+    STREQ   R0,[R4,#12]                   ; Sprite File Header +12: Offset to first free word = File size
+
+    ; Sprite Header +0: Offset to next Sprite from this Sprite = File size without File Hdr
+    SUBEQ   R0,R0,#sprFHdrSize
+    ; Applies to Create a Sprite File (EQ) and Create a Sprite (NE), hence no condition code on STR
+    STR     R0,[R4,#(sprFHdrSize+0)]      ; Sprite Header +0: Offset to next Sprite from this Sprite = File size without File Hdr
+
+    MOVEQ   R0,#1
+    STREQ   R0,[R4,#4]                    ; Sprite File Header +4: Number of Sprites = 1
+    MOVEQ   R0,#sprFHdrSize
+    STREQ   R0,[R4,#8]                    ; Sprite File Header +8: Offset to first Sprite (No extension words) = 16
+
+    ; Write Sprite Name (12 bytes) stored in pal_buffer
+    LDR     R0,[R12,#pal_buffer]
+    STR     R0,[R4,#(sprFHdrSize+4)]
+    LDR     R0,[R12,#(pal_buffer+4)]
+    STR     R0,[R4,#(sprFHdrSize+8)]
+    LDR     R0,[R12,#(pal_buffer+8)]
+    STR     R0,[R4,#(sprFHdrSize+12)]
+
+    ; Write width in words-1. For Type 6, width_in_pixels = width in words
+    SUB     R0,R1,#1
+    STR     R0,[R4,#(sprFHdrSize+16)]
+
+    ; Write height-1
+    SUB     R0,R6,#1
+    STR     R0,[R4,#(sprFHdrSize+20)]
+
+    ; Write First bit used (Left)
+    MOV     R0,#0
+    STR     R0,[R4,#(sprFHdrSize+24)]
+
+    ; Write Last bit used (Right)
+    MOV     R0,#&1F
+    STR     R0,[R4,#(sprFHdrSize+28)]
+
+    ; Write offset to image data
+    MOV     R0,#&2C
+    STR     R0,[R4,#(sprFHdrSize+32)]     ; Offset to sprite image data
+
+    ; Get address of start of image data
+    ADD     R0,R0,#sprFHdrSize            ; Add Sprite File Header size
+    ADD     R0,R0,R4                      ; R0 = Address of Sprite Image data in memory
+    STR     R0,[R12,#spr_DataAddr]        ; R0 = Address of Sprite data
+
+    ; Calculate hourglass values (Divide Sprite height (in R6) by 100)
+    ; also enables Escape key if not creating a RISC OS 4 Module
+    ; and zero the Index array and insert starting pixel value into Index array
+    MOV     R0,R6
+    BL      init_hourglass                ; [in s.Hourglass_Index]
+
+    ; Write offset to mask data
+    MOV     R0,#&2C
+    ; R8 = size of image
+    ; R9 = size of mask (=0 if no mask)
+    CMP     R9,#0
+    ADDNE   R0,R0,R8                      ; We have a mask so offset to mask (R0) = offset to image + image size
+    STR     R0,[R4,#(sprFHdrSize+36)]     ; Offset to mask data = &2C (No mask) or offset value
+
+
+    MOV     R10,#0
+
+    ; Need to write these mask entries even if no mask
+    STR     R10,[R12,#mask_x]
+    STR     R10,[R12,#mask_RemoveIt]      ; = 0 Don't remove mask
+    STR     R11,[R12,#mask_Flags]         ; mask/alpha/chan/clear
+
+    ; Skip this bit if no mask
+    BEQ     %FT02
+
+    ; Write mask values into workspace ready for conversion
+
+    ; Get address of mask
+    ADD     R0,R0,#sprFHdrSize            ; Add Sprite File Header size
+    ADD     R0,R0,R4
+    ; R0 points to start of mask data
+    STR     R0,[R12,#mask_DataAddr]
+
+    ; Prime with first 32 bits of mask, which we know =&FFFFFFFF
+    MOV     R10,#-1                       ; R10 = &FFFFFFFF
+    STR     R10,[R12,#mask_CurrentWord]
+    STR     R10,[R0]                      ; Store 1st word in mask data
+
+    TST     R11,#1:SHL:6                  ; NE if bit 6 set
+    MOVEQ   R10,#0                        ; If Remove unused mask not set then R10 = 0
+    STR     R10,[R12,#mask_RemoveIt]      ; = 0 Don't remove mask, = -1 Remove mask if unused
+
+    ; Drop through to 02
+
+02
+
+; Do conversion
+
+; Registers available: R0,R8,R9,R10
+; R2 = in buffer, R3 = in buffer size, R4 = out buff, R5 = out buff size, R11 = Flags shifted to 0-7
+; R1 = width, R8 = image size, R7 = Flags (R0), R6 = height
+
+    ; Write values into workspace ready for conversion
+    MOV     R0,#0
+    STR     R0,[R12,#qoi_fhandle]         ; No file handle as QOI file is in memory
+    STR     R0,[R12,#spr_fhandle]         ; No file handle as Sprite file is in memory
+    STR     R0,[R12,#qoi_RunCount]        ; run = 0
+    ADD     R0,R2,#QOI_HEADER_SIZE        ; Skip QOI Header
+    STR     R0,[R12,#qoi_fptr]
+    SUB     R0,R3,#QOI_FOOTER_SIZE
+    ADD     R0,R2,R0                      ; = Input Addr + (buff size - QOI Footer)
+    STR     R0,[R12,#qoi_DataEnd]         ; End of QOI data
+
+    MOV     R3,R1                         ; Width
+
+; R4 = out buff
+; R8 = image size, R7 = Flags (R0), R6 = height
+
+    ; Create Sprite from QOI
+
+
+;--------------------------- Process QOI chunks into Sprite pixels ----------------------;
+
+; process Sprite lines - read QOI data and store in sprite
+; loop until all lines written - checking how much data reqd/used
+
+; Registers available: R0,R9,R10,R11
+; R4 = Sprite buffer, R5 = Sprite buffer size
+; R3 = width, R8 = image size, R7 = Flags (R0), R6 = height
+
+; Need to preserve: R4 = Sprite buffer, R7 = Flags (R0), R8 = size of image
+
+
+    LDR     R10,[R12,#spr_DataAddr]        ; R10  = Address of Sprite data
+
+load_spr_block                            ; Process a block of lines
+
+; Process QOI chunks until we have done R6 lines of Sprite data
+; R3  = Number of pixels in a line (=width)
+; R5  = Number of pixels left to process in the line (=width) [Decrementing]
+; R6  = Number of Sprite lines to fill (height)
+; R8  = image size
+; R10 = Address where to store sprite pixel
+; R12 = PhotoDesk workspace
+
+
+    MOV     R5,R3                         ; Number of Sprite pixels in this line
+
+
+load_spr_line                             ; Process a line
+
+; Process QOI chunks until we have done a line of Sprite data
+; R0  = Sprite pixel in &AABBGGRR format
+; R1  = If non-zero then processing a Run chunk
+; R3  = Number of pixels in a line (=width)
+; R5  = Number of pixels left to process in the line (=width) [Decrementing]
+; R6  = Number of Sprite lines to fill (height)
+; R8  = image size
+; R10 = Address where to store sprite pixel
+; R12 = PhotoDesk workspace
+
+
+    BL      qoi2spr                       ; [in s.qoi2spr]
+
+
+    ; On exit: R0 = Sprite pixel or Error block, R1 = -1, 0, 1..61
+    ; If R1 = -1 then error from qoi2spr
+    CMN     R1,#1                         ; -1
+    BEQ     IFC_Convert_Error             ; and exit, R0 = Ptr to error block
+
+    MOV     R9,R0                         ; Preserve sprite pixel value (R0) before it gets altered by writeMask
+                                          ; in case we need it for a Run chunk
+    BL      writeMask                     ; [in s.WriteMask]
+
+
+    ; Store pixel in R0 ... (We know buffer is large enough)
+    STR     R0,[R10],#4
+    SUBS    R5,R5,#1
+
+    ; Optmised routine to process Run chunks
+    ; If in a run then don't call qoi2spr just use same R0 value
+
+    BEQ     %FT79                         ; Finshed this line, go and see if more lines to do
+
+    ; More of this line to do, so see if Run (R1<>0) then process a Run chunk else (R1=0) go get next chunk
+    CMP     R1,#0
+    BEQ     load_spr_line                 ; Go get next chunk from QOI file
+
+    ; Process a Run chunk. R1 = Number of pixels to write to this line
+    CMP     R1,R5                         ; If R1 > R5 then just do R5 pixels to finish the line else can do R1 pixels
+    MOVHI   R1,R5
+
+    LDR     R2,[R12,#qoi_RunCount]
+    SUB     R2,R2,R1                      ; Update Run count in qoiDataBlock
+    STR     R2,[R12,#qoi_RunCount]
+    SUB     R5,R5,R1                      ; Update number of pixels left in this line
+71
+
+    MOV     R0,R9                         ; Get original sprite pixel value
+    BL      writeMask                     ; [in s.WriteMask]
+
+    ; Store pixel in R0 ... (We know buffer is large enough)
+    STR     R0,[R10],#4
+    SUBS    R1,R1,#1
+    BNE     %BT71                         ; Go store next Run pixel
+
+    ; Done R1 pixels
+    ; We might have processed all the Run, or come to the end of the line with more Run to process, or both!
+
+    CMP     R5,#0
+    BNE     load_spr_line                 ; Not finished with this line, so go get next chunk from QOI file
+
+    ; Finshed this line, go and see if more lines to do
+79
+
+
+;--------------------------- Another line complete ---------------------------;
+
+    ; Set mask_x so it's ready for the next line
+    LDR     R0,[R12,#mask_Flags]          ; See if we have a mask
+    ANDS    R0,R0,#&0F                    ; R0 = mask_bpp in bits 0-3
+    BEQ     %FT01                         ; No mask
+
+    ; We have a mask ...
+    LDR     R0,[R12,#mask_x]
+    CMP     R0,#0                         ; Is mask_x = 0?
+    MOVNE   R0,#32                        ; no, so point mask_x to end of mask word to skip end of row padding
+    STRNE   R0,[R12,#mask_x]
+
+01
+
+;    ; Check for Escape key
+;
+;    ; In WIMP, the Escape key is disabled and so OS_ReadEscapeState always returns with C clear
+;    ; which is why we enable Escape key with OS_Byte 229,0 at the start
+;    SWI     OS_ReadEscapeState            ; C is set if Escape has been pressed
+;    ADRCSL  R0,err_escLoad
+;    BCS     IFC_Convert_Error
+
+    ; and update Hourglass
+
+    LDR     R0,[R12,#hg_onepcentcount]    ; The current 1% row count (Decreasing)
+    SUBS    R5,R0,#1                      ; Done another row
+    STRNE   R5,[R12,#hg_onepcentcount]    ; Current 1% row count not reached 0
+    ; Once reach 0 reset the 1% row count and increment the Percentage display
+    LDREQ   R0,[R12,#hg_pcent]            ; Percent value to show (0..99)
+    LDREQ   R5,[R12,#hg_onepcent]         ; Number of rows that represents 1%
+    ADDEQ   R0,R0,#1                      ; Next %
+    STREQ   R0,[R12,#hg_pcent]
+    STREQ   R5,[R12,#hg_onepcentcount]    ; Reset current 1% row count
+    SWIEQ   XHourglass_Percentage
+
+
+    ; Done all lines yet?
+    SUBS    R6,R6,#1
+    BHI     load_spr_block                ; Process next line
+
+
+;--------------------------- All done, so exit ---------------------------;
+
+
+    ; Calculate size of Sprite file
+    LDR     R5,[R4,#(sprFHdrSize+0)]      ; Offset to next sprite from this sprite
+    TST     R7,#1                         ; NE if R7 (R5) bit 0 set then don't include 16 byte Sprite File Header
+    ADDEQ   R5,R5,#(sprFHdrSize-4)        ; -4 = Don't include Total size of Sprite Area word in buffer used on exit
+
+    ; See if we need to remove solid mask
+    LDR     R0,[R12,#mask_RemoveIt]       ; Is = -1?
+    CMN     R0,#1                         ; Will = 0 if not to remove mask
+    BNE     %FT05                         ; Not -1, so leave it be
+    ; Yes, so we remove mask as all bits are solid
+
+    ; Write offset to mask
+    MOV     R5,#&2C
+    STR     R5,[R4,#(sprFHdrSize+36)]     ; Offset to mask = Offset to image
+    ; R8 = size of image
+    ADD     R5,R5,R8                      ; Offset to next sprite = offset to image + image size
+    STR     R5,[R4,#(sprFHdrSize+0)]      ; Offset to next sprite from this sprite
+    TST     R7,#1                         ; NE if R7 (R5) bit 0 set then don't include 16 byte Sprite File Header
+    ADDEQ   R5,R5,#sprFHdrSize
+    STREQ   R5,[R4,#12]                   ; Offset to first free word (= EOF)
+    SUBEQ   R5,R5,#4                      ; Don't include Total size of Sprite Area word in buffer used on exit
+
+    ; IF ((sprType% >>> 31) AND 1) = 1 THEN sprData%!40 = sprType% AND &7FFFFFFF - Remove wide mask bit if set
+    LDR     R0,[R4,#(sprFHdrSize+40)]     ; Sprite Mode word
+    TST     R0,#1:SHL:31                  ; Is bit 31 (wide mask) set?
+    BICNE   R0,R0,#1:SHL:31               ; Clear bit 31
+    STRNE   R0,[R4,#(sprFHdrSize+40)]
+
+05
+    ; On exit need to restore R0 from workspace, and return buffer reqd/used in R5
+    MOV     R0,R5                         ; but R5 is about to get overwritten
+
+
+IFC_Convert_Qoi2Spr_Exit
+
+;    MOV     R8,R0                         ; Preserve R0
+;    ; Check for Escape pressed in case we missed it
+;    SWI     OS_ReadEscapeState            ; C is set if Escape has been pressed
+;    MOVCS   R0,#124                       ; If so, then call OS_Byte 124 to clear Esc condition
+;    SWICS   OS_Byte
+;
+;    ; Restore Escape conditions to when we started
+;    MOV     R0,#229
+;    LDR     R1,[R12,#esc_state]           ; Current state (0=Enabled, <>0=Disabled)
+;    MOV     R2,#0
+;    SWI     OS_Byte
+;    MOV     R0,R8                         ; Restore R0
+
+
+    SWI     XHourglass_Off
+
+    LDMFD   R13!,{R1-R11,R14}             ; Restore entry registers
+
+    MOV     R5,R0                         ; Return buffer size in R5
+    LDR     R0,[R12,#IFC_R0]              ; Restore flags in R0
+
+    ; Exit, making sure V flag is clear
+    CMP     PC,#0
+    MOV     PC,R14
+
+
+    END
+

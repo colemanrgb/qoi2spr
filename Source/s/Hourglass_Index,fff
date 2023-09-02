@@ -1,0 +1,107 @@
+; init_hourglass: Set up the hourglass percentage based on the height of the Sprite divided by 100
+;                 and initialises Index array to 0 and inserts pre-calculated Index value and starting pixel into Index,
+;                 in case QOI starts with a Run chunk
+;==================================================================================================
+
+
+init_hourglass    FunctionSig
+
+; On entry:
+; R0 = Height of Sprite which will be divided by 100
+
+; On exit:
+; All registers preserved
+
+    STMFD   R13!,{R0-R2,R14}
+
+    ; Calculate hourglass values (Divide R0 by 100)
+    CMP     R0,#200
+    MOVLO   R0,#1                         ; If < 200 Sprite lines then set pcent on each row
+    BLO     %FT41
+
+    ; Divide by 10 - Result in R0, adapted as not interested in remainder (R1)
+    SUB     R1,R0,#10                     ; Keep (x-10) for later
+    SUB     R0,R0,R0,LSR#2
+    ADD     R0,R0,R0,LSR#4
+    ADD     R0,R0,R0,LSR#8
+    ADD     R0,R0,R0,LSR#16
+    MOV     R0,R0,LSR#3
+    ADD     R2,R0,R0,ASL#2
+    SUBS    R1,R1,R2,ASL#1                ; Calc (x-10) - (x/10)*10
+    ADDPL   R0,R0,#1                      ; Fix-up quotient
+    ; Divide by 10 again - Result in R0, not interested in remainder (R1)
+    SUB     R1,R0,#10                     ; Keep (x-10) for later
+    SUB     R0,R0,R0,LSR#2
+    ADD     R0,R0,R0,LSR#4
+    ADD     R0,R0,R0,LSR#8
+    ADD     R0,R0,R0,LSR#16
+    MOV     R0,R0,LSR#3
+    ADD     R2,R0,R0,ASL#2
+    SUBS    R1,R1,R2,ASL#1                ; Calc (x-10) - (x/10)*10
+    ADDPL   R0,R0,#1                      ; Fix-up quotient
+41
+    ; R0 contains the value for 1%
+    STR     R0,[R12,#hg_onepcent]         ; Number of rows that represents 1%
+    STR     R0,[R12,#hg_onepcentcount]    ; The current 1% row count (Decreasing)
+    MOV     R0,#-1
+    STR     R0,[R12,#hg_pcent]            ; Percent value to show (0..99). Initially =-1
+
+  IF :LNOT::DEF:RO4_MODULE                ; As long as we're not in a RISC OS 4 Module
+    ; Enable Escape conditions
+    MOV     R0,#229
+    MOV     R1,#0
+    MOV     R2,#255
+    SWI     OS_Byte
+    STR     R1,[R12,#esc_state]           ; Store Escape current state (0=Enabled, <>0=Disabled)
+    ; And enable Escape conditions
+    MOV     R1,#0
+    MOV     R2,#0
+    SWI     OS_Byte
+  ENDIF
+
+
+; Now initialise Index array to 0 and inserts pre-calculated Index value and starting pixel into Index,
+; in case QOI starts with a Run chunk
+
+  IF :LNOT::DEF:PHOTODESK                 ; Not needed for PhotoDesk as it's already zeroed
+    ; zero the index array
+    MOV     R0,#0
+
+  IF QOI_INDEX <= &FF
+    ADD     R2,R12,#QOI_INDEX             ; Start of Index array
+  ELSE
+    ADD     R2,R12,#QOI_INDEX:AND:&FF00
+    ADD     R2,R2, #QOI_INDEX:AND:&00FF
+  ENDIF
+
+    MOV     R1,#QOI_INDEX_SIZE            ; Size of index = 64 words in bytes
+01
+    STR     R0,[R2],#4                    ; 4 bytes per array element
+    SUBS    R1,R1,#4
+    BNE     %BT01
+  ENDIF
+
+    ; Write starting pixel value
+    MOV     R0,#pixel_start_value         ; Starting pixel value
+
+  IF :LNOT::DEF:PHOTODESK                 ; Not needed for PhotoDesk as it's already set in the workspace
+    STR     R0,[R12,#pixel_start]         ; [R12,#fileDataBlock+64]
+  ENDIF
+
+    ; Pre-calculate the Index value (R1) and insert starting pixel into Index, in case QOI starts with a Run chunk
+    MOV     R1,#pixel_start_index         ; FNqoi_colour_hash(&FF000000) = &35(53)
+
+  IF QOI_INDEX <= &FF
+    ADD     R2,R12,#QOI_INDEX             ; Start of Index array
+  ELSE
+    ADD     R2,R12,#QOI_INDEX:AND:&FF00   ; Start of Index array
+    ADD     R2,R2, #QOI_INDEX:AND:&00FF
+  ENDIF
+
+    STR     R0,[R2,R1,LSL#2]              ; !(index%+((FNqoi_colour_hash(pixel%) MOD 64)*4)) = pixel%
+
+    LDMFD   R13!,{R0-R2,PC}               ; Return to calling routine
+
+
+    END
+

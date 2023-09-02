@@ -1,0 +1,63 @@
+| Compile source code to binary files suitable for loading into BASIC
+
+Set Qoi2Spr$CompileDir <Obey$Dir>
+
+| Set Debug and Stats flags for BSwitch ...
+
+Set Qoi2Spr$Debug "TRANSLOADER=FALSE DEBUG=FALSE STATS=FALSE"
+
+
+
+IfThere <Qoi2Spr$CompileDir>.o.AssemCode_obj Then Delete <Qoi2Spr$CompileDir>.o.AssemCode_obj
+IfThere <Qoi2Spr$CompileDir>.s.(App).!TmpRunImage Then Delete <Qoi2Spr$CompileDir>.s.(App).!TmpRunImage
+IfThere <Qoi2Spr$CompileDir>.^.!Qoi2Spr.!RunImage Then Delete <Qoi2Spr$CompileDir>.^.!Qoi2Spr.!RunImage
+IfThere <Qoi2Spr$CompileDir>.^.!Qoi2Spr.Resources.Lib_Wimp Then Delete <Qoi2Spr$CompileDir>.^.!Qoi2Spr.Resources.Lib_Wimp
+
+
+| To produce a listing add cmd line options: --list=<Qoi2Spr$CompileDir>.o.AssemCode_list --width=132 --length=0
+| and add "OPT 1+8192" to start of s.(App).!App (Turns on normal listing + turns off listing conditional directives)
+
+Echo Assembling binary file for BASIC ...
+Echo
+objasm --no_esc --no_warn -apcs=/32 <Qoi2Spr$CompileDir>.s.(App).!App -o <Qoi2Spr$CompileDir>.o.AssemCode_obj
+
+IfThere <Qoi2Spr$CompileDir>.o.AssemCode_obj Then Else Obey
+
+Echo
+Echo ... Linking ...
+link -bin <Qoi2Spr$CompileDir>.o.AssemCode_obj -o <Qoi2Spr$CompileDir>.^.!Qoi2Spr.Resources.AssemCode
+Echo ... Done
+Echo
+
+Echo Creating !RunImage and Wimp Library ...
+
+Echo
+Copy <Qoi2Spr$CompileDir>.s.(App).RunImage <Qoi2Spr$CompileDir>.s.(App).!TmpRunImage ~CF
+IfThere <Qoi2Spr$CompileDir>.s.(App).!TmpRunImage Then Else Obey
+
+Echo
+|Echo ... Adding Lib_Qoi2Spr to end of !TmpRunImage ...
+BJoin <Qoi2Spr$CompileDir>.s.(App).!TmpRunImage <Qoi2Spr$CompileDir>.s.(App).Lib_Qoi2Spr -V
+
+Echo
+|Echo ... Adding Lib_Spr2Qoi to end of !TmpRunImage ...
+BJoin <Qoi2Spr$CompileDir>.s.(App).!TmpRunImage <Qoi2Spr$CompileDir>.s.(App).Lib_Spr2Qoi -V
+
+Echo
+|Echo ... Adding VersionBas to end of !TmpRunImage ...
+BJoin <Qoi2Spr$CompileDir>.s.(App).!TmpRunImage <Qoi2Spr$CompileDir>.s.VersionBas -V
+
+
+<Qoi2Spr$CompileDir>.s.(App).BSwitch <Qoi2Spr$CompileDir>.s.(App).!TmpRunImage <Qoi2Spr$CompileDir>.^.!Qoi2Spr.!RunImage <Qoi2Spr$Debug>
+IfThere <Qoi2Spr$CompileDir>.^.!Qoi2Spr.!RunImage Then Else Obey
+
+
+<Qoi2Spr$CompileDir>.s.(App).BSwitch <Qoi2Spr$CompileDir>.s.(App).Lib_Wimp <Qoi2Spr$CompileDir>.^.!Qoi2Spr.Resources.Lib_Wimp <Qoi2Spr$Debug>
+IfThere <Qoi2Spr$CompileDir>.^.!Qoi2Spr.Resources.Lib_Wimp Then Else Obey
+
+
+| Remove temporary files ...
+IfThere <Qoi2Spr$CompileDir>.s.(App).!TmpRunImage Then Delete <Qoi2Spr$CompileDir>.s.(App).!TmpRunImage
+
+Echo
+Echo ... Done

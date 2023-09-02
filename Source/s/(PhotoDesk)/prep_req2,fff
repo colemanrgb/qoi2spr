@@ -1,0 +1,93 @@
+; Prepares channel flag bits for read only VM request
+
+;-------------------------;
+; Scan CCB flags for request and include mask if used
+;-------------------------;
+
+; On entry:
+; R0  = Channel request mask 32 bit pattern (bit 0 = control, bit 1 = mask, bit 2 = first channel, etc)
+; R11 = in_block
+
+; On exit:
+; CCB request bits set
+; R0 tweaked if mask channel not defined
+; All other registers preserved
+
+
+prepare_request    FunctionSig
+    STMFD   R13!,{R1-R9,R14}
+    ; Set registers to indicate this is a write request
+    MOV     R8,#-1
+    MOV     R9,#2_11000
+    B       %FT01
+
+prepare_rd_request    FunctionSig
+    STMFD   R13!,{R1-R9,R14}
+    ; Set registers to indicate this is a read only request
+    MOV     R8,#0
+    MOV     R9,#2_01000
+
+    ; Drop through
+
+01
+    LDR     R1,[R11]                      ; Get SCB from in_block
+    LDR     R2,[R1,#scb_channels]         ; Total number of channels for this image in SCB
+    LDR     R3,[R1,#scb_offsetCCB_1]      ; Offset to first CCB in SCB
+    LDR     R4,[R11,#in_ccb_anchor]       ; Anchor for CCBs in in_block
+    ADD     R3,R4,R3                      ; Points to first CCB
+    LDR     R4,[R3,#ccb_nextchannel]      ; Offset between channels in CCB
+    MOV     R5,#0                         ; Channel indexer
+    MOV     R6,#2_100                     ; First possible colour channel in request mask
+    MOV     R1,#0                         ; Mask defined flag
+
+10                                        ; Loop
+    LDR     R7,[R3,#ccb_Flags]            ; Get current channel flags
+    BIC     R7,R7,#2_11000                ; Start by clearing out destruction and request bits
+    TST     R0,#2_01                      ; Are we asking for the control channel?
+    BEQ     %FT11                         ; No
+
+    TEQ     R5,#0                         ; Is this the control channel?
+    ORREQ   R7,R7,#2_1000                 ; Request for read if so
+11
+    TST     R0,#2_10                      ; Are we asking for a mask channel?
+    BEQ     %FT12                         ; No
+
+    ; If this is a read only request then
+    CMP     R8,#0
+    BNE     %FT20
+
+    ; Read only request
+    TST     R7,#2_00100                   ; Is this an active mask maybe?
+    BEQ     %FT12                         ; No
+
+    TST     R7,#2_100000                  ; Is mask empty?
+    ORRNE   R7,R7,#2_01000                ; Request for read if not empty
+    MOVNE   R1,#-1                        ; -1 in R1 indicates that a mask has been found
+    B       %FT12
+
+20
+    ; Write request
+    TST     R7,#2_00100                   ; Is this an active mask maybe?
+    ORRNE   R7,R7,#2_11000                ; Request for write if so
+    MOVNE   R1,#-1                        ; -1 in R1 indicates that a mask has been found
+
+12
+    TEQ     R5,#0                         ; If not control check to see if in request mask
+    BEQ     %FT13
+
+    TST     R0,R6                         ; Is this channel in request mask?
+    ORRNE   R7,R7,R9                      ; Request for write if so
+    MOV     R6,R6,LSL#1                   ; Next bit to check
+13
+    STR     R7,[R3,#ccb_Flags]            ; Store back in CCB
+    ADD     R3,R3,R4                      ; Point to next CCB
+    ADD     R5,R5,#1                      ; Do for n channels
+    CMP     R5,R2
+    BLO     %BT10
+
+    TEQ     R1,#0                         ; Was mask channel defined?
+    BICEQ   R0,R0,#2_10                   ; Force mask bit to zero if not. (Can't be had!)
+    LDMFD   R13!,{R1-R9,PC}
+
+    END
+

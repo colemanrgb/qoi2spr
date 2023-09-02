@@ -1,0 +1,101 @@
+; QOI to Sprite converter for PhotoDesk
+;==================================================================================================
+
+; This is a Utility (&FFC) file without a header
+; Link as a -bin file and manually set the filetype to Utility
+; PhotoDesk will load the Handler file into memory and jump to start of file and start executing from there
+
+; Other files are loaded at the end of this file
+
+;    OPT     1+8192                        ; Turn on normal listing + Turn off listing conditional directives
+
+; Define the type of file we're producing ...
+                                           ; These don't need a value, just need them to be defined
+                                          GBLL    PHOTODESK
+                                          ;GBLL    APP
+                                          ;GBLL    RO4_MODULE
+
+
+    GET     s.Hdr                         ; SWI numbers, Macros, and QOI constants
+
+
+    ; Workspace is initialised below
+
+
+;==================================================================================================
+
+    AREA    |!!Handler$$Code|, CODE, READONLY
+
+
+    ENTRY
+
+
+; On entry:
+; R0 = SCB of image being saved
+; R1 = in_block
+; R2 = Action code:
+;      0 = Configure SaveAs window
+;      1 = User has clicked on an icon in the SaveAs window
+;      2 = Save image to file
+;      3 = Load an image file
+;      4 = Check we can save this type of sprite
+;      5 = Save extended info to a text file (Not used)
+;      6 = Reserved for PhotoShop Handler
+; R3 = SaveAs window handle
+; R4 = Icon clicked on (if R2=1)
+
+
+    ; Action in R2:
+    ;   0: Prepare the SaveAs window   [in s.(PhotoDesk).prep]
+    ;   1: Click in SaveAs window
+    ;   2: Save Sprite as a QOI file   [in s.(PhotoDesk).save]
+    ;   3: Load a QOI file as a Sprite [in s.(PhotoDesk).load]
+    ;   4: Save compatibility check
+    ;   5: Extended info or greater
+
+    CMP     R2,#1
+    BLO     prepare_save                  ; 0: Removes any extra icons from SaveAs window added by other handlers
+    MOVEQ   PC,R14                        ; 1: Nothing to do
+
+    CMP     R2,#5                         ; 5: Extended info or greater
+    MOVHS   PC,R14                        ;    Not supported so just return
+
+    CMP     R2,#3                         ; 2, 3, or 4
+    ; Do stuff that's common to 2 and 3 (No SWIs otherwise flags may change!)
+    STMLSFD R13!,{R1-R12,R14}             ; Put regs on stack
+    MOVLO   R4,R0                         ; R0  = SCB of image being saved
+    LDRLS   R10,[R1,#wimp_pollBlock]      ; R10 = wimp poll block
+    MOVLS   R11,R1                        ; R11 = in_block
+    ADRLSL  R12,workspace                 ; Point to workspace
+    STRLS   R11,[R12,#inblock]            ; Store pointer to in_block
+    BLO     do_save                       ; 2: Save Sprite as a QOI file
+    BEQ     do_load                       ; 3: Load a QOI file as a Sprite
+
+    ; 4: Save compatibility check [in s.PD_prep]
+    LDR     R0,[R0,#PD_SprType]           ; PhotoDesk Sprite type (1, 3, or 4 = 8bpp RGB, 24bpp RGB, or CMYK)
+    CMP     R0,#save_type                 ; We can save types 1 and 3
+    MOVLS   R0,#-1                        ; non-zero  = We can save this type of Sprite
+    MOVHI   R0,#0                         ; else zero = Can't save (CMYK)
+    MOV     PC,R14                        ; and exit
+
+
+;=========================== Include library routines ===========================;
+
+    GET     s.(PhotoDesk).prep_req2
+
+;============================== Conversion routines =============================;
+
+    GET     s.Hourglass_Index             ; Initialise hourglass percentage values and fills Index array with zeroes and inserts
+                                          ; starting pixel value
+    GET     s.(PhotoDesk).load            ; Load QOI file as a Sprite (do_load)
+    GET     s.qoi2spr                     ; Converts QOI chunk to RGBA value
+
+    GET     s.(PhotoDesk).prep            ; Prepare icons in SaveAs window (prepare_save)
+    GET     s.(PhotoDesk).save            ; Save Sprite as a QOI file (do_save)
+    GET     s.spr2qoi                     ; Converts RGBA value to a QOI chunk. Includes writeFooter
+
+    DCB     "32OK"                        ; Flag file as 32bit
+
+
+    END
+

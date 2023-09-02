@@ -1,0 +1,162 @@
+; Deal with Mask byte
+; Routines:
+; writeMask: Write the Mask/Alpha byte from pixel into memory. Used by s.(App).Qoi2Spr and s.(Module).IFC_Qoi2Spr
+; add_mask:  Adds Mask byte to pixel value. Used by s.ProcessSpr
+;==================================================================================================
+
+
+writeMask     FunctionSig
+;==================================================================================================
+
+; On entry:
+; R0 = Sprite pixel with mask byte in top 8 bits
+
+; On exit:
+; R0 = Sprite pixel with top 8 bits adjusted as necessary
+; Other registers preserved
+
+; if alpha sprite then write R10 as is
+; else clear top 8 bits and write R10 and if mask write R7 into mask buffer
+
+    STMFD   R13!,{R3-R9,R14}              ; Preserve entry registers
+
+    ; Load in mask data
+  IF mask_DataBlock <= &FF
+    ADD     R5,R12,#mask_DataBlock        ; Start of maskDataBlock%
+  ELSE
+    ADD     R5,R12,#mask_DataBlock:AND:&FF00
+    ADD     R5,R5, #mask_DataBlock:AND:&00FF
+  ENDIF
+
+    LDMIA   R5,{R6-R9}
+    ; R6  = mask_x
+    ; R7  = mask_CurrentWord
+    ; R8  = mask_DataAddr
+    ; R9  = mask_Flags (= mask_bpp (bits 0-3) / alpha (bit 4) / channels (bit 5))
+
+    AND     R5,R9,#2_11:SHL:4             ; Just get bits 4 and 5
+    CMP     R5,#1:SHL:4                   ; If greater then bit 5 is set. If equal then bit 4 set. If less then bit 4 clear
+    ; 3 channel QOI (bit 5 clear), so clear top 8 bits of pixel% (rgba.a). No mask
+    BICLS   R0,R0,#&FF:SHL:24
+    ORREQ   R0,R0,#&FF:SHL:24             ; Add in Alpha channel = solid (&FF), if bit 4 set
+    LDMLSFD R13!,{R3-R9,PC}               ; and return to calling routine
+
+    ; R0  = pixel%
+    ; R4  = mask_pixel%
+
+    ;TST     R9,#1<<5                      ; Is bit 5 set = 4 channels, clear = 3 channels
+    ;BEQ     channels3
+    ; 4 channel QOI
+    MOV     R4,R0,LSR#24                  ; Mask byte
+    ANDS    R5,R9,#&0F                    ; R5 = mask_bpp in bits 0-3 (=0,1,8)
+    BNE     %FT10                         ; 1bpp or 8bpp mask
+    ; 4 channel QOI but no mask so ensure top 8 bits are clear unless using Alpha channel
+    TST     R9,#1:SHL:4                   ; bit 4 set = Alpha channel sprite
+    BICEQ   R0,R0,#&FF:SHL:24             ; not set so clear top 8 bits
+    LDMFD   R13!,{R3-R9,PC}               ; and return to calling routine
+
+10
+    ; IF mask_bpp% THEN
+    BIC     R0,R0,#&FF:SHL:24             ; Clear top bits of sprite pixel
+    ; Store mask byte at maskDataBlock%!24 if not &FF
+    CMP     R4,#&FF
+    STRNE   R4,[R12,#mask_RemoveIt]       ; Decide if mask is used or not
+
+    ; IF (mask_bpp% = 1) AND (mask_pixel%) THEN
+    CMP     R5,#1                         ; Is mask_bpp = 1 bpp? (either 1 or 8)
+    BNE     %FT08                         ; no, 8bpp, leave R4 unchanged
+    CMP     R4,#&80                       ; yes, so convert 8bpp mask value down to 1bpp
+    MOVLO   R4,#0                         ; If 0..&7F then set =0
+    MOVHS   R4,#1                         ; If &80..&FF then set = 1
+;    CMP     R4,#0                         ; yes, so if mask byte <> 0
+;    MOVNE   R4,#1                         ; then set mask byte to 1bpp
+08
+    CMP     R6,#32                        ; Is mask_x = 32?
+    ADDEQ   R8,R8,#4                      ; yes, so increment maskData to next mask word
+    MOVEQ   R6,#0                         ; and reset mask_x to start of mask_current_word
+    MOVEQ   R7,#-1                        ; and set mask_current_word = &FFFFFFFF
+    STREQ   R7,[R8]                       ; Store mask_current_word at maskData
+
+    CMP     R5,#8                         ; Is mask_bpp = 8 bpp?
+    MOVEQ   R3,#&FF                       ; Yes then check a byte
+    MOVNE   R3,#1                         ; No then check a bit
+    CMP     R4,R3                         ; Do we have a change of mask byte/bit?
+    BICNE   R7,R7,R3,LSL R6               ; yes, so clear byte/bit at position mask_x (R6) in mask_current_word
+    ORRNE   R7,R7,R4,LSL R6               ; and then add in the mask byte/bit
+    STRNE   R7,[R8]                       ; Store mask_current_word at maskData
+    ADD     R6,R6,R5                      ; mask_x += 8 bpp or 1 bpp
+
+    ; Store mask data
+  IF mask_DataBlock <= &FF
+    ADD     R5,R12,#mask_DataBlock        ; Start of maskDataBlock%
+  ELSE
+    ADD     R5,R12,#mask_DataBlock:AND:&FF00
+    ADD     R5,R5, #mask_DataBlock:AND:&00FF
+  ENDIF
+
+    ; R6  = mask_x%
+    ; R7  = mask_current_word%
+    ; R8  = maskData%
+    STMIA   R5,{R6-R8}
+
+    LDMFD   R13!,{R3-R9,PC}               ; and return to calling routine
+
+
+  IF :LNOT::DEF:TRANSLOADER
+
+add_mask      FunctionSig
+;==================================================================================================
+
+    STMFD   R13!,{R1,R4,R8,R14}           ; Preserve registers whilst we get the Mask
+    ; Gets Mask value and adds it into R5
+
+; R1  = Mask bits left
+; R3  = width in pixels
+; R4  = Mask Word
+; R5  = Colour value (&FFBBGGRR)
+; R6  = Address of Mask (=0 if no Mask)
+; R8  = 1 << Mask log2bpp
+; R11 = spr_Flags
+; R14 = Mask bitmask / Mask value (0 or &FF if not Wide Mask, else 0..&FF)
+
+    ADD     R0,R12,#mask_LoopData         ; Space for 4 registers: {R1,R4,R8,R14}
+    LDMIA   R0,{R1,R4,R8,R14}             ; Retrieve Mask details
+    ; R1=Mask bits left, R4=Mask Word, R8=1 << Mask log2bpp, R14=Mask bitmask
+
+;mask loop
+    ; bit 31,21 = %00 - New format 1bpp       = &FF
+    ;           = %10 - New format Wide 8bpp  = DONT CHANGE
+    ;           = %01 - Old format 1,2,4,8bpp = &FF
+    ;           = %11 - Old format Wide mask  = ILLEGAL
+
+    ANDS    R14,R4,R14                    ; Get Mask value = Word AND bitmask
+    BEQ     %FT01                         ; If R14 = 0 then skip
+    ; R14 <> 0 so ...
+    TST     R11,#1:SHL:31                 ; If Wide Mask (8bpp) flag clear (EQ) then (New 1bpp or Old 1,2,4,8bpp)
+    MOVEQ   R14,#&FF                      ; Non-zero value so ensure Mask value = &FF
+
+01
+    CMP     R14,#&FF                      ; If Mask value is not solid (&FF)
+    BICNE   R5,R5,#&FF:SHL:24             ; then clear Mask byte (= &00BBGGRR)
+    ORRNE   R5,R5,R14,LSL#24              ; and add in Mask value
+
+; If done all pixels then skip this section .....
+    CMP     R3,#1                         ; R3 = Number of pixels left to process in line (width)
+    LDMEQFD R13!,{R1,R4,R8,PC}            ; Restore registers after the Mask and return
+
+    SUBS    R1,R1,R8                      ; Reduce number of bits left to process in Word: bitsLeft -= (1 << log2bpp)
+    LDREQ   R4,[R6],#4                    ; Get next Mask Word
+    MOVEQ   R1,#32                        ; Number of bits left to process in Mask Word
+    MOVNE   R4,R4,LSR R8                  ; Shift Word to get next pixel: word = word >> (1 << log2bpp)
+
+    ;ADD     R0,R12,#mask_LoopData
+    STMIA   R0,{R1,R4}                    ; Store updated Mask details ready for next pixel
+    ; R1=bits left, R4=Mask Word, 1 << log2bpp, spr_Flags, bitmask
+
+    LDMFD   R13!,{R1,R4,R8,PC}            ; Restore registers after the Mask and return
+
+  ENDIF
+
+
+    END
+

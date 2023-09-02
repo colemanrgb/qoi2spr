@@ -1,0 +1,17 @@
+| Convert between QOI and Sprite files
+| Launch Help
+
+Set Qoi2Spr$Dir <Obey$Dir>
+
+| Set Qoi2Spr$Path
+Run <Qoi2Spr$Dir>.Resources.ResFinder Qoi2Spr
+
+| Set up Application Info Variables
+Obey Qoi2Spr:AppVars
+
+| Default to Text Help
+Set Qoi2Spr$Help Qoi2Spr:HelpText
+| but see if HTML Help is available
+IfThere Qoi2Spr:Help.index/htm Then If "<Alias$@RunType_FAF>" <> "" Then Set Qoi2Spr$Help Qoi2Spr:Help.index/htm
+
+IfThere <Qoi2Spr$Help> Then Filer_Run <Qoi2Spr$Help> Else Error Help not found

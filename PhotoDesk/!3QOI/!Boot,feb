@@ -1,0 +1,13 @@
+ Set Alias$@RunType_A61 Run <Photodesk$Dir>.!Run %%*0
+ Set Photodesk$Load_A61 True
+ Set Photodesk$OLE_A61 True
+
+| QOI handler sprites
+If "<Boot$OSVersion>" < "400" Then IconSprites <Obey$Dir>.!Sprites Else IconSprites <Obey$Dir>.!5Sprites
+
+| QOI filetype sprites
+Set File$Type_A61 QOI
+If "<Boot$OSVersion>" < "500" Then DOSMap QOI &A61
+If "<Boot$OSVersion>" < "400" Then Set Qoi2Spr$Sprites Sprites Else Set Qoi2Spr$Sprites 5Sprites
+If "<Qoi2Spr$Dir>" = "" Then IconSprites <Obey$Dir>.<Qoi2Spr$Sprites>
+Unset Qoi2Spr$Sprites

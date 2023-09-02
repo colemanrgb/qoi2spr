@@ -1,0 +1,673 @@
+; Save Sprite (PhotoDesk Types 1 and 3) as a QOI file
+;==================================================================================================
+
+;------------------------------- Save QOI file to disc --------------------------;
+
+; On entry:
+; R3  = SaveAs window handle
+; R4  = SCB of image being saved
+; R10 = Start of Wimp Poll block
+; R11 = in_block
+; R12 = Start of PhotoDesk workspace
+
+; On exit:
+; R0 = 0 save successful, else is pointer to standard error block
+
+
+do_save       FunctionSig
+
+    LDR     R1,[R11]                      ; Get the current SCB
+    STMFD   R13!,{R1,R3}                  ; Preserve current SCB and SaveAs window handle, for exit
+    STR     R4,[R11]                      ; Store SCB of image to save
+
+    ; Show hourglass
+    MOV     R0,#50                        ; Delay displaying hourglass for half a second
+    SWI     XHourglass_Start
+
+    ; Enable Escape conditions
+    MOV     R0,#229
+    MOV     R1,#0
+    MOV     R2,#255
+    SWI     OS_Byte
+    STR     R1,[R12,#esc_state]           ; Store Escape current state (0=Enabled, <>0=Disabled)
+
+
+; Workspace is zeroed each time Handler is loaded
+
+
+;--------------------------- Initialise QOI header --------------------------------------;
+; R4  = width
+; R5  = height
+; R7  = Number of QOI channels (3 or 4)
+; R8  = width * height
+; R9  = SCB of image being saved
+; R10 = Start of Wimp Poll block
+; R11 = in_block
+; R12 = Start of PhotoDesk workspace
+
+    MOV     R9,R4                         ; R9 points to Sprite Control Block of image
+
+    ; Get Sprite Width and Height from SCB
+    LDR     R4,[R9,#scb_width]            ; R4 = width of image-1
+    LDR     R5,[R9,#scb_height]           ; R5 = height of image-1
+
+    ADD     R4,R4,#1                      ; R4 = width of image in pixels
+    ADD     R5,R5,#1                      ; R5 = height of image
+
+    MUL     R8,R4,R5                      ; width * height
+
+    ; Width and Height are stored in Big Endian in QOI file
+
+    ; Swap endian (width)
+    ;REV     R2,R4                        ; ARMv6
+    EOR     R0,R4,R4,ROR#16
+    BIC     R0,R0,#&FF0000
+    MOV     R2,R4,ROR#8
+    EOR     R2,R2,R0,LSR#8
+
+    ; Swap endian (height)
+    ;REV     R3,R5                        ; ARMv6
+    EOR     R0,R5,R5,ROR#16
+    BIC     R0,R0,#&FF0000
+    MOV     R3,R5,ROR#8
+    EOR     R3,R3,R0,LSR#8
+
+    ; Store Big Endian width and height in workspace
+    STR     R2,[R12,#QOI_Width]
+    STR     R3,[R12,#QOI_Height]
+
+    ; Work out how many QOI channels to use
+
+    LDR     R9,[R9,#PD_SprType]           ; R9 = PhotoDesk Sprite type (1, 3, or 4 = 8 bpp, 24 bpp, or CMYK)
+
+    MOV     R0,#2_10                      ; See if a mask is present (bit 1)
+    ; R0  = channel request mask
+    ; R11 = in_block
+
+    BL      prepare_rd_request            ; Put in dummy request (library.prep_req2)
+    ; On exit, CCB request bits set, R0 tweaked if mask channel not defined
+
+
+    LDR     R3,[R11,#save_word]           ; Get save word: (bits set during save operations)
+    BIC     R3,R3,#15:SHL:7               ; Clear out mask used + VIDC, 8 bit, and 1 bit options (bits 7-10 of save word)
+
+    TST     R0,#2_10                      ; Did we find a mask?
+    ORRNE   R3,R3,#5:SHL:7                ; Yes, want 8 bit mask (set bits 7 and 9 of save word)
+    MOVNE   R7,#4                         ;   so QOI will have 4 channels
+    MOVNE   R0,#2_110                     ;   and request 1 channel + Mask
+    MOVEQ   R7,#3                         ; No, so set QOI to 3 channels
+    MOVEQ   R0,#2_100                     ;   and just request 1 channel
+    CMP     R9,#3
+    ORRHS   R0,R0,#2_011000               ; RGB or CMYK, so add in 2 extra channels (total 3 image channels)
+  IF :DEF:HANDLE_CMYK
+    ORRHI   R0,R0,#2_100000               ; CMYK, so add in 1 extra channel (total 4 image channels)
+  ENDIF
+    ; Prepare the VM request for the actual image array (Not needed for Indexed images)
+    MOVHS   R2,#1:SHL:4                   ; = Lazy VM with no squeak
+    STRHS   R2,[R11,#VM_Flags]            ; Set VM flags
+
+
+    ; Have done mask, so store Channels and Colour space in QOI file
+
+    STR     R3,[R11,#save_word]           ; Update save word: (bits set during save operations)
+
+    ; R0  = channel request mask
+    ; R11 = in_block
+    BL      prepare_rd_request            ; Put in request
+    ; On exit, CCB request bits set, R0 tweaked if mask channel not defined
+
+    ; Store Channels and Colour space (QOI_LINEAR) in QOI file - each take up a byte
+
+    ORR     R0,R7,#(QOI_LINEAR:SHL:8)     ; Add in the Colour space byte (always QOI_LINEAR (=1))
+    STR     R0,[R12,#QOI_ChanColspc]      ; Store number of Channels and Colour space
+
+
+;--------------------------- QOI header initialised -------------------------------------;
+
+    ; Calculate hourglass values (Divide Sprite height (in R5) by 100)
+    ; also enables Escape key if not creating a RISC OS 4 Module
+    ; and zero the Index array and insert starting pixel value into Index array
+    MOV     R0,R5
+    BL      init_hourglass                ; [in s.Hourglass_Index]
+
+; R4  = width
+; R5  = height
+; R7  = Number of QOI channels (3 or 4)
+; R8  = width * height
+; R10 = Start of Wimp Poll block
+; R11 = in_block
+; R12 = Start of PhotoDesk workspace
+
+
+;--------------------------- Claim QOI buffer -------------------------------------------;
+
+    ; Sort out buffer for QOI file - see if we can hold the whole file in memory
+
+    ; Calculate worst case scenario for QOI file size:
+    ; width * height * (1 + channels(R7)) + QOI_HEADER_SIZE + QOI_FOOTER_SIZE
+
+    ADD     R7,R7,#1
+    MUL     R3,R8,R7
+    ADD     R3,R3,#(QOI_HEADER_SIZE + QOI_FOOTER_SIZE)
+
+    LDR     R2,[R11,#scratch]             ; Pointer to scratch buffer
+    MOV     R7,#scratchSize               ; Size of scratch buffer (64K)
+    MOV     R6,R2
+
+    ; If QOI file size <= scratchSize then just use the scratch buffer
+    ; else see if we can claim enough RMA for the whole file (R3) - if not then use scratch buffer as a cache
+    CMP     R3,R7
+    BLS     %FT01
+
+    MOV     R8,R3                         ; Preserve R3 (Worst Case File Size)
+    MOV     R0,#6                         ; Claim R3 bytes of memory from RMA?
+    ; Size in R3
+    SWI     XOS_Module
+    ; Returns RMA block address in R2
+    ; If error claiming for whole file, try for half of file
+    MOVVS   R3,R3,LSR#1
+    SWIVS   XOS_Module
+    STRVC   R2,[R12,#rma_buffer]          ; Address of memory in RMA
+    MOVVC   R6,R2                         ; Buffer address in RMA
+    MOVVC   R7,R3                         ; Size of buffer
+    ; Error claiming block from RMA, so use scratch buffer
+    MOVVS   R2,R6                         ; Error claiming block from RMA, so use scratch buffer
+    MOVVS   R7,#scratchSize
+    MOV     R3,R8                         ; Restore R3
+
+01
+    STR     R2,[R12,#qoi_CacheAddr]       ; Address of cache for QOI
+    STR     R7,[R12,#cache_size]          ; Size of cache
+
+; Copy QOI header from workspace into file buffer
+    ADD     R0,R12,#QOI_Magic             ; Start of header in workspace
+    LDMIA   R0,{R1,R2,R8,R9}              ; QOI_Magic, QOI_Width, QOI_Height, QOI_ChanColspc
+    STMIA   R6,{R1,R2,R8,R9}
+
+    ADD     R0,R6,#QOI_HEADER_SIZE        ; Written 16 bytes but header is only 14 bytes! so increment R6 here
+    STR     R0,[R12,#qoi_CachePtr]        ; Set address of where to write next byte
+
+    SUB     R0,R7,#QOI_HEADER_SIZE
+    STR     R0,[R12,#qoi_CacheFree]       ; Reduce amount of free space in QOI cache
+
+    SUB     R0,R3,#QOI_HEADER_SIZE
+    STR     R0,[R12,#qoi_DataSize]        ; Reduce amount of QOI data
+
+    STR     R3,[R12,#qoi_BufSize]         ; Size of QOI file for memory calculations at end
+    STR     R6,[R12,#qoi_BufAddr]         ; Address of QOI buffer for memory calculations at end
+
+
+;--------------------------- Create QOI file on disc ------------------------------------;
+; R3  = QOI file size
+; R4  = width in pixels
+; R5  = height in pixels
+; R6  = Address of cache
+; R7  = Size of cache
+; R10 = Start of Wimp Poll block
+; R11 = in_block
+; R12 = Start of PhotoDesk workspace
+
+
+    ; If QOI file size <= Size of cache then storing whole QOI file (including Header+footer) into buffer
+    CMP     R3,R7
+    MOV     R0,#QOI_HEADER_SIZE
+    ADDLS   R0,R0,R6                      ; If storing whole file in memory then need to add the buffer address to qoiData%
+    STR     R0,[R12,#qoi_fptr]            ; Where we are in the QOI file (=start of QOI data)
+    BLS     %FT21                         ; QOI file fits in buffer so will create file at end
+
+    ; QOI file doesn't all fit into buffer (R3 > R7) so create file so we can flush cache to it as we process Sprite
+
+    MOV     R0,#&8F                       ; Create file with R/W access, no paths
+    MOV     R1,R10                        ; Filename starts here
+    ; R1 points to pathname of QOI file (at start of wimp block)
+    SWI     XOS_Find                      ; File handle in R0
+    BVS     returnErrorSQ                 ; Error?
+
+    STR     R0,[R12,#qoi_fhandle]         ; Store QOI file handle
+
+21
+
+
+;--------------------------- Process Sprite pixels into QOI chunks ----------------------;
+
+
+save_spr
+
+; R4  = width in pixels
+; R5  = height in pixels
+; R11 = in_block
+; R12 = PhotoDesk workspace
+
+
+    ; Combine Sprite Type and QOI channels into a single register (R3)
+    ; bit 0 = 0 (3 channels) or 1 (4 channels)
+    ; bit 1 = 0 (Indexed Sprite) or 1 (RGB Sprite)
+    ; bit 2 = 1 (CMYK)
+
+    LDR     R3,[R11]                      ; R3 = Sprite Control Block
+    LDR     R3,[R3,#PD_SprType]           ; R3 = PhotoDesk Sprite type (1, 3, or 4 = Indexed, RGB, or CMYK)
+    CMP     R3,#4
+    SUBLO   R3,R3,#1                      ; R3 = 0 (8 bpp Indexed) or 2 (24 bpp RGB)
+    LDRB    R0,[R12,#QOI_ChanColspc]
+    SUB     R0,R0,#3                      ; R0 = 0 (3 channels) or 1 (4 channels)
+    ORR     R3,R3,R0                      ; R3 combines Sprite type (bit 1) and QOI channels (bit 0)
+
+
+;------------------------ Process 24 bpp Sprite pixels into QOI chunks ------------------;
+
+    MOV     R9,#0                         ; R9 = Starting line + Number of lines processed so far
+
+    LDR     R10,[R12,#pixel_start]        ; previous pixel
+
+
+;---------------------- VM loop -----------------------;
+
+save_vm_loop
+
+    ; Claim VM to store Sprite lines ...
+    SUB     R0,R5,R9                      ; R0 = Number of lines required = Height - Lines done
+    MOV     R1,R9                         ; R1 = Starting at this line
+    LDR     R2,[R12,#inblock]             ; R2 = in_block
+    SWI     Photodesk_VM
+    ; On exit:
+    ; R0 = Number of lines that can be read from the VM
+    ; R1 = Preserved
+    ; R2 = Preserved
+
+    ADD     R9,R9,R0                      ; R9 = Number of lines in Sprite we've processed, for next call to VM
+
+    STMFD   R13!,{R5,R9}                  ; Preserve registers we're going to re-use
+
+    ; R2 = R11 = in_block
+
+    TST     R3,#2_10                      ; Is bit 1 set (24 bpp). Bit 0 = Channels (0=3 channels, 1=4 channels)
+    LDREQ   R8,[R2]                       ; If not then is 8 bpp and so get palette address into R8
+    ADDEQ   R8,R8,#scb_palette            ; Sprite Control Block + 1024
+
+    ; Get the address for mask and Sprite data
+    ADD     R1,R2,#off_base               ; Start of plane pointers from in_block!off_base
+
+    ; R3=0: 3 channels (No mask)  +  8 bpp Sprite
+    ; R3=1: 4 channels (Has mask) +  8 bpp
+    ; R3=2: 3 channels (No mask)  + 24 bpp Sprite
+    ; R3=3: 4 channels (Has mask) + 24 bpp
+    ; R3=4: 3 channels (No mask)  + CMYK Sprite
+    ; R3=5: 4 channels (Has mask) + CMYK Sprite
+
+    MOV     R6,#0                         ; R6 = No mask
+
+    CMP     R3,#1
+    LDRLO   R7,[R1]                       ; R7 = Address of 8 bpp Sprite data
+    LDMEQIA R1,{R6,R7}                    ; R6 = Address of Mask data, R7 = Address of 8 bpp Sprite data
+
+    CMP     R3,#2                         ; Will also set R6 and R7 if R3 = 0 - will correct below
+    LDMEQIA R1,{R7,R8,R9}                 ; R7,R8,R9 = Addresses of RGB Sprite data
+    LDMHIIA R1,{R6,R7,R8,R9}              ; R6 = Address of Mask data, R7,R8,R9 = Addresses of RGB Sprite data
+
+  IF :DEF:HANDLE_CMYK
+    CMP     R3,#4                         ; CMYK (PD Type 4) needs R7,R8,R9,R10 for Addresses of CMYK Sprite data
+    MOVEQ   R6,#0                         ; R6 = No mask
+    MOVEQ   R7,R1                         ; Set R7 to point to Addresses for start of CMYK Sprite data
+    LDRHI   R6,[R1]                       ; R6 = Address of Mask data
+    ADDHI   R7,R1,#4                      ; Set R7 to point to Addresses for start of CMYK Sprite data (Skipping Mask data)
+    MOVHS   R8,#0                         ; R8 = offset into addresses
+  ENDIF
+
+    MOV     R2,R0                         ; R2 = Number of lines to process in VM
+    LDR     R1,[R12,#qoi_RunCount]        ; Run count
+
+
+; R1  = Run count
+; R2  = Number of lines in VM to process
+; R3  = Sprite Type and Channels (0 = 8bpp+3channels, 1 = 8bpp+4channels, 2 = 24bpp+3channels, 3 = 24bpp+4channels)
+; R4  = width in pixels
+; R6  = Mask Address (0 = No mask)
+; R7  = Address of 8 bpp Sprite data
+; R8  = Address of palette if 8 bpp
+; R7,R8,R9 = Address of RGB Sprite data if 24 bpp
+; R10 = Previous pixel
+; R12 = PhotoDesk workspace
+
+
+;-------------------- Block loop ----------------------;
+
+save_spr_block                            ; Process a block of lines
+
+    MOV     R11,R4                        ; R11 = Number of pixels per line (width)
+
+
+;-------------------- Line loop -----------------------;
+
+save_spr_line                             ; Process a line
+
+    ; Get the mask byte
+    CMP     R6,#0                         ; 0 = No mask
+    MOVEQ   R5,#&FF:SHL:24
+    LDRNEB  R5,[R6],#1                    ; Get Mask byte
+    MOVNE   R5,R5,LSL#24
+
+
+  IF :DEF:HANDLE_CMYK
+    ; Convert CMYK into RGB
+    CMP     R3,#4
+    BLO     %FT24                         ; Is Indexed or RGB instead
+    STMFD   R13!,{R3,R7,R10}
+    MOV     R0,R7                         ; R1 points to Addresses for start of CMYK Sprite data
+    MOV     R3,R8                         ; R3 = offset into addresses
+    LDMIA   R0,{R7,R8,R9,R10}             ; R7,R8,R9,R10 = Addresses of CMYK Sprite data
+
+    ; PD stores CMYK bytes inverted compared to Sprite Type 7 so need to reverse them with EOR #&FF
+
+    LDRB    R7,[R7,R3]                    ; Get C byte
+    EOR     R7,R7,#&FF
+    LDRB    R0,[R8,R3]                    ; Get M byte
+    EOR     R0,R0,#&FF
+    ORR     R7,R7,R0,LSL#8                ; R7 = MMCC
+    MOV     R7,R7,LSL#16                  ; R7 = &MMCC0000
+    LDRB    R0,[R9,R3]                    ; Get Y byte
+    EOR     R0,R0,#&FF
+    MOV     R9,R0,LSL#24                  ; R9 = YY
+    LDRB    R0,[R10,R3]                   ; Get K byte
+    EORS    R0,R0,#&FF
+    MOVEQ   R0,#1                         ; If K = 0 then set = 1
+    MOV     R0,R0,LSL#24                  ; R0 = KK
+
+    ; CMYK to RGB conversion (&KKYYMMCC to &00BBGGRR) leaving RGB value in R5 (uses R0, R8 and R7) ...
+    ADDS    R8,R0,R9                      ; R8 = KK + YY => Blue (&BB000000)
+    MOVCS   R8,#&FF000000                 ; clamp value
+    ORR     R7,R7,R8,LSR#16               ; Add in Blue ; R7 now = &MMCCBB00
+    ADDS    R8,R0,R7                      ; R8 = KK + MM => Green (&GG000000)
+    MOVCS   R8,#&FF000000                 ; clamp value
+    ORR     R7,R7,R8,LSR#24               ; Add in Green ; R7 now = &MMCCBBGG
+    ADDS    R8,R0,R7,LSL#8                ; R8 = KK + CC => Red (&RR000000)
+    MOVCS   R8,#&FF000000                 ; clamp value
+    MOV     R7,R7,LSL#16                  ; R7 now = &BBGG0000 (Get rid of MMCC)
+    ORR     R7,R7,R8,LSR#16               ; Add in Red ; R7 now = &BBGGRR00
+    MVN     R7,R7                         ; Invert
+    MOV     R7,R7,LSR#8                   ;  and shift to &00BBGGRR
+    ORR     R5,R5,R7                      ; And add to Mask/Alpha value
+
+    ADD     R8,R3,#1                      ; Increment offset
+    LDMFD   R13!,{R3,R7,R10}
+    B       %FT32
+24
+  ENDIF
+
+
+    ; Get the RGB pixel value
+    TST     R3,#2_10                      ; Is bit 1 set (24 bpp)
+
+    ; 24 bpp Sprite
+    LDRNEB  R0,[R7],#1                    ; Get Red byte
+    ORRNE   R5,R5,R0
+    LDRNEB  R0,[R8],#1                    ; Get Green byte
+    ORRNE   R5,R5,R0,LSL#8
+    LDRNEB  R0,[R9],#1                    ; Get Blue byte
+    ORRNE   R5,R5,R0,LSL#16
+
+    ; 8 bpp Sprite
+    LDREQB  R0,[R7],#1                    ; Get Palette entry byte from Sprite data
+    ; Pixel (R0) is palette entry number (0..255)
+    ; Convert into &xxBBGGRR pixel using palette
+    LDREQ   R0,[R8,R0,LSL#2]              ; R0 = R8 + R0*4 ; = xxBBGGRR
+    ; Add the mask (R5)
+    BICEQ   R0,R0,#&FF:SHL:24             ; R0 = 00BBGGRR
+    ORREQ   R5,R5,R0                      ; R5 = AABBGGRR
+
+
+  IF :DEF:HANDLE_CMYK
+32
+  ENDIF
+
+
+    CMP     R5,R10
+    BNE     %FT70                         ; Current pixel <> previous pixel
+
+    ; Current pixel = previous pixel so either start Run (R1 = 0) or already in Run (R1 <> 0)
+    ; spr2qoi will increment Run by 1 so need to take that into account here
+    ; If Run = 0..60 then just add 1 and go round loop
+    ; If Run = 61 then need to call qoi2spr to save Run chunk (don't add 1 here as qoi2spr will do it for us)
+    TEQ     R1,#61                        ; IF (run% = 61) then drop through to call qoi_save (will make Run=62)
+    ADDLO   R1,R1,#1                      ; run% += 1
+    BLO     %FT71                         ; else see if we have reached the end of the line
+
+70
+    TEQ     R1,#0
+    STRNE   R1,[R12,#qoi_RunCount]        ; Update Run count in qoi_RunCount and write Run chunk
+
+
+    ; Convert a Sprite pixel (&AABBGGRR) into a QOI chunk
+    ; R5  = Sprite pixel
+    ; R10 = Previous pixel
+
+    BL      spr2qoi
+
+    ; On exit: R0 = Sprite pixel or Error block, R1 = -1, 0, 1..61
+
+    MOV     R10,R0                        ; Store current pixel as previous pixel
+
+    ; If R1 = -1 then error from spr2qoi
+    CMN     R1,#1                         ; -1
+    LDMEQFD R13!,{R5,R9}                  ; Restore regisers
+    BEQ     returnErrorSQ                 ; and exit, R0 = Ptr to error block
+
+71
+    SUBS    R11,R11,#1
+    BNE     save_spr_line                 ; Not finished with this line, so go get next pixel
+
+    ; Finshed this line, go and see if more lines to do
+
+
+;--------------------------- Another line complete ---------------------------;
+
+    ; Check for Escape key
+
+    ; In WIMP, the Escape key is disabled and so OS_ReadEscapeState always returns with C clear
+    ; which is why we enable Escape key with OS_Byte 229,0 at the start
+    SWI     OS_ReadEscapeState            ; C is set if Escape has been pressed
+    ADDCS   R13,R13,#(2*4)                ; Clear registers from the stack: {R5,R9}
+    MOVCS   R0,#17
+    ;LDMCSFD R13!,{R5,R9}
+    ;ADRCSL  R0,err_escSave
+    BCS     returnErrorSQ
+
+    ; and update Hourglass
+
+    LDR     R0,[R12,#hg_onepcentcount]    ; The current 1% row count (Decreasing)
+    SUBS    R5,R0,#1                      ; Done another row
+    STRNE   R5,[R12,#hg_onepcentcount]    ; Current 1% row count not reached 0
+    ; Once reach 0 reset the 1% row count and increment the Percentage display
+    LDREQ   R0,[R12,#hg_pcent]            ; Percent value to show (0..99)
+    LDREQ   R5,[R12,#hg_onepcent]         ; Number of rows that represents 1%
+    ADDEQ   R0,R0,#1                      ; Next %
+    STREQ   R0,[R12,#hg_pcent]
+    STREQ   R5,[R12,#hg_onepcentcount]    ; Reset current 1% row count
+    SWIEQ   XHourglass_Percentage
+
+    ; Done all lines yet?
+
+    SUBS    R2,R2,#1
+    BHI     save_spr_block                ; Process next line
+
+    STR     R1,[R12,#qoi_RunCount]        ; Update Run count in qoi_RunCount
+
+    ; R5 = Height
+    ; R9 = Number of Sprite lines processed + Starting line for next call to VM
+
+    LDMFD   R13!,{R5,R9}                  ; Restore registers
+
+    ; Have we done all the lines in the Sprite (R9 = R5)?
+
+    TEQ     R9,R5                         ; Number of lines in Sprite we've processed = Height?
+    BNE     save_vm_loop                  ; Get next block of lines
+
+
+;--------------- Sprite done, so write footer to QOI file -----------------;
+
+    BL      writeFooter
+
+
+    ; Drop through to save_exit
+
+
+;--------------------------- Common exit point... ---------------------------;
+
+
+save_exit
+
+; On entry:
+; R0  = Save status (Either =0 (No error) or =-1 (Error already reported to user) or points to Error block to be reported)
+; R12 = PhotoDesk workspace
+
+returnErrorSQ                             ; Handle errors here
+
+; R3  = SaveAs window handle
+; R9  = R0
+; R10 = Sprite Control Block
+; R11 = in_block
+; R12 = PhotoDesk workspace
+
+    MOV     R9,R0                         ; Store save status (= 0 (No error) or Ptr to error block). Ignore R1 from writeFooter
+                                          ; R0 = 17 if Escape pressed
+
+    ; Scan CCB flags for suppresed mask channel
+    LDR     R11,[R12,#inblock]
+    ; Restore any pending mask request bits before restoring old SCB (library.rest_req)
+    ;BL      restore_request
+    LDR     R1,[R11]                      ; Get SCB from in_block
+    LDR     R2,[R1,#scb_channels]         ; Total number of channels for this image
+    LDR     R3,[R1,#scb_offsetCCB_1]      ; Offset to first CCB
+    LDR     R4,[R11,#in_ccb_anchor]       ; Anchor for CCBs in in_block
+    ADD     R3,R4,R3                      ; Points to first CCB
+    LDR     R4,[R3,#ccb_nextchannel]      ; Offset between channels in CCB
+01
+    LDR     R1,[R3,#ccb_Flags]            ; Get current channel flags
+    TST     R1,#1:SHL:15                  ; Channel suppressed?
+    BEQ     %FT02
+    BIC     R1,R1,#1:SHL:15               ; Reset suppression bit
+    ORR     R1,R1,#2_100                  ; Restore as active mask
+02
+    STR     R1,[R3,#ccb_Flags]            ; Store back in CCB
+    ADD     R3,R3,R4                      ; Point to next CCB
+    SUBS    R2,R2,#1
+    BHI     %BT01
+    ; end restore_request
+
+    LDR     R10,[R11]                     ; Note the SCB before we restore it (to update SCB below if no error)
+    LDMFD   R13!,{R1,R3}                  ; Restore SCB and SaveAs window handle saved at the start
+    STR     R1,[R11]                      ; Put it back in in_block%!0
+
+
+    LDR     R1,[R12,#qoi_fhandle]         ; [R12,#fileDataBlock]       ; QOI file handle
+    CMP     R1,#0                         ; Clears V
+    BNE     %FT60                         ; R1 <> 0 then used a cache to buffer file data already flushed to disc in writeFooter
+
+    ; Managed to hold whole QOI file in memory so now need to save it to disc (No file handle)
+    ; R1 = 0
+
+    CMP     R9,#0                         ; If error (R9 <> 0) skip saving to disc
+
+    MOVEQ   R0,#0                         ; Save memory as an untyped file - we set filetype below
+    LDREQ   R1,[R11,#wimp_pollBlock]      ; Filename starts here
+    MOVEQ   R2,#0                         ; Load address
+    MOVEQ   R3,#0                         ; Exec address
+    LDREQ   R4,[R12,#qoi_CacheAddr]       ; Address of cache for QOI
+    LDREQ   R5,[R12,#qoi_fptr]            ; End address in memory (Size of file = qoiData% - R4)
+    SWIEQ   XOS_File
+    MOVVS   R9,R0                         ; Store ptr to Error block
+
+    CMP     R1,#0                         ; Ensure the Z flag is set so we don't close file handle if R1=0 (also clears V)
+
+60
+    ; File has been cached in memory and flushed to disc (We have a file handle)
+
+    ; Close QOI file
+    MOVNE   R0,#0
+    SWINE   XOS_Find
+
+    CMP     R9,#0
+    BNE     %FT09                         ; If error skip setting Filetype and Updating SCB
+
+
+;-------------------------- Set file type -----------------------;
+
+    ; No error, so set QOI filetype in f_type (&A61)
+    LDR     R1,[R11,#wimp_pollBlock]      ; R1 points to pathname of QOI file (in wimp block)
+    MOV     R2,   #f_type:AND:&FF00
+    ADD     R2,R2,#f_type:AND:&00FF
+    MOV     R0,#18
+    SWI     XOS_File
+
+;-------------------------- Update SCB --------------------------;
+; R1  = Pointer to filename
+; R10 = Sprite Control Block
+; R11 = in_block
+
+    ; Get file size
+    MOV     R0,#23
+    ; R1 = Filename
+    SWI     XOS_File                      ; Get file size (in R4), corrupts R1-R6
+    STR     R4,[R10,#scb_filesize]        ; Update file size in SCB
+
+    ; Update timestamp of file in SCB to now
+    LDR     R1,[R11,#scratch]             ; Use scratchspace as buffer
+    MOV     R0,#3
+    STR     R0,[R1]
+    MOV     R0,#14
+    SWI     XOS_Word                      ; OS_Word 14,3
+
+    ; Update timestamp in SCB!116 (date low bytes 0..3) and SCB!120 (date high byte 4)
+    LDMIA   R1,{R2,R3}
+    ADD     R4,R10,#scb_date_low
+    STMIA   R4,{R2,R3}
+
+09
+    CMP     R9,#17                        ; Has Escape been pressed
+    ADREQ   R9,err_escSave                ; If so then set error block
+    MOVEQ   R0,#6                         ; and delete the file if it exists
+    LDREQ   R1,[R11,#wimp_pollBlock]      ; Filename starts here
+    SWIEQ   XOS_File                      ; Ignore any error
+
+
+;---------------------- Release RMA if claimed ------------------;
+
+    LDR     R2,[R12,#rma_buffer]          ; Zero means: Using scratch buffer else Address in RMA
+    CMP     R2,#0
+    MOVNE   R0,#7
+    SWINE   XOS_Module
+
+
+;------------------------ Save Settings -------------------------;
+
+
+; Do these here in case we are exiting with an error ...
+
+    ; Check for Escape pressed in case we missed it
+    SWI     OS_ReadEscapeState            ; C is set if Escape has been pressed
+    MOVCS   R0,#124                       ; If so, then call OS_Byte 124 to clear Esc condition
+    SWICS   OS_Byte
+
+    ; Restore Escape conditions to when we started
+    MOV     R0,#229
+    LDR     R1,[R12,#esc_state]           ; Current state (0=Enabled, <>0=Disabled)
+    MOV     R2,#0
+    SWI     OS_Byte
+
+    SWI     XHourglass_Off
+
+    MOV     R0,R9                         ; Restore save status
+
+; Exit with error? ...
+
+    LDMFD   R13!,{R1-R12,PC}              ; and exit back to PhotoDesk
+
+
+;----------------------------------- Error messages -----------------------------;
+err_escSave   FunctionSig
+    DCD     69
+    DCB     "Save aborted!",0
+    ALIGN
+
+
+    END
+

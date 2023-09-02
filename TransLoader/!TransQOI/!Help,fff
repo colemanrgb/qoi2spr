@@ -1,0 +1,153 @@
+===============================================================================
+
+  ,ad8888ba,      ,ad8888ba,    88
+ d8"'    `"8b    d8"'    `"8b   88  ConvertQOI : Convert a QOI file to a Sprite
+d8'        `8b  d8'        `8b  88
+88          88  88          88  88
+        88  8P  Y8,        ,8P  88    Version  : 1.00 (27 Aug 2023)
+  aa     Y88P    Y8a.    .a8P   88               (C) Richard Coleman, 2023
+  `"Y8888Y"Y8a    `"Y8888Y"'    88
+
+
+           ConvertQOI is licensed under the terms of the MIT license
+
+===============================================================================
+
+Written in BASIC and Assembler, !TransQOI allows conversion of images in the new
+"QOI" format to RISC OS Sprite for applications which make use of Computer
+Concepts' FFG protocol, such as Ovation Pro and PrivateEye.
+
+The QOI filetype (&A61) has been allocated by ROOL.
+
+The Quite OK Image (QOI) format, invented by Dominic Szablewski, is designed for
+fast, lossless image compression. The specification, reference code and example
+images can be found at https://qoiformat.org/
+
+This application conforms to version 1.0 2022-01-05 of the QOI specification.
+
+
+INSTALLATION
+===============================================================================
+
+Copy the application "!TransQOI" into a suitable directory such as !OvnPro.AutoRun
+
+To set the filetype of a QOI file downloaded from the Internet or from a Windows
+PC, add the following to your Mimemap file:
+    image/x-qoi		QOI		a61	.qoi
+
+
+OPTIONS
+===============================================================================
+
+Options which can be specified in TransLoader$Tail in the !Run file:
+  -da <N>        Use a Dynamic Area instead of Wimpslot. <N> is max size of
+				 Dynamic Area in Mb
+  -mask1         Create a RISC OS 3.5 Sprite with a 1bpp mask
+  -mask8         Create a RISC OS 3.5 Sprite with an 8bpp alpha mask.
+                 Overrides -mask1
+  -alpha         Create a RISC OS 5 Sprite with an alpha channel instead of a
+                 mask. Overrides -mask1 and -mask8
+  -clean         With -mask1 or -mask8 will remove mask if all bits of the mask
+                 are solid. With -alpha will only use alpha channel if the QOI
+                 has 4 channels
+  -autoOpts      Set the mask and alpha channel options according to the number
+                 of channels in the QOI file. Overrides -mask1, -mask8, -alpha
+                 and -clean. Can be shortened to -auto
+  -ex <N>        Specify the X eigen value in <N> (where <N> is 0-3 or 180,
+				 90, 45, 22). Defaults to 1 (90 DPI)
+  -ey <N>        Specify the Y eigen value in <N> (where <N> is 0-3 or 180,
+				 90, 45, 22). Defaults to 1 (90 DPI)
+
+
+The mask and alpha parameters are set depending on which version of RISC OS it
+is being run on:
+  * Prior to RISC OS 5 a 1bpp mask is used
+  * For RISC OS 6 an 8bpp alpha mask is used
+  * For RISC OS 5 an alpha channel is used
+
+The -clean parameter is also set so that if all the bits of the mask are solid,
+then the mask will be removed. And if -alpha is specified then an alpha channel
+will only be used if the QOI file being converted has 4 channels.
+
+This can be changed by altering TransLoader$Tail in the !Run file.
+
+Pressing Escape will abandon the loading of the QOI file.
+
+
+MEMORY
+===============================================================================
+
+By default memory to hold the Sprite and the QOI file is taken from the
+application's Wimpslot, which is limited to 28Mb on non-RISC OS 5 systems (and
+on RISC OS 5 if Aemulor is active), or 512Mb on RISC OS 5.
+
+Using a Dynamic Area is recommended for non-RISC OS 5 systems.
+
+To use a Dynamic Area specify the -da parameter, followed by a non-zero positive
+number to specify the maximum size of the Dynamic Area in MB, eg: -da 64, to
+claim a maximum of 64MB. Memory is only claimed when loading the file to be
+converted and when the actual conversion takes place, and is released as soon as
+the conversion is complete. And so depending on what else you have running you
+might not be able to claim all that memory.
+
+The Dynamic Area is called "QOI 2 Sprite Heap".
+
+Prior to RISC OS 3.80 applications could set the maximum size of the Dynamic
+Area to the amount of memory in the machine. From RISC OS 3.80 clamps were set
+on the maximum size of a Dynamic Area to prevent applications trying to use all
+the memory. The default value is 128MB.
+
+Qoi2Spr will try and take as much memory as it can to do the conversion, using
+up to 3 cache buffers. You can restrict the amount of memory used by each cache
+buffer by setting the System Variable (Number) <Qoi2Spr$MaxCacheSize> to the
+value, in bytes, to be used; for example, to restrict each cache buffer to
+100Mb use:
+    SetEval Qoi2Spr$MaxCacheSize 100*1024*1024
+would force Qoi2Spr to only use up to 300Mb in total.
+The minimum amount that can be specified is 64Kb for each cache buffer.
+
+
+LIMITATIONS
+===============================================================================
+
+* !TransQOI can't read files larger than 2Gb.
+
+* !TransQOI only converts from QOI to Sprite.
+
+* On an error all that is reported is the message "File could not be converted".
+  This is a limitation of the !Server application. The reason for the error is
+  stored in the system variable <TransQOI$Failure>.
+
+
+SUPPORT
+===============================================================================
+
+For support queries or any other help with this software, please contact:
+    coleman@orpheusmail.co.uk
+
+
+LICENSE
+===============================================================================
+
+Copyright (c) 2023 Richard Coleman
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions :
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+===============================================================================
+

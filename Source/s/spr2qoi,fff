@@ -1,0 +1,674 @@
+; Process a Sprite pixel into a QOI chunk
+;==================================================================================================
+
+; On entry:
+; R5  = Sprite pixel value in &AABBGGRR format
+; R10 = Previous pixel value
+; R12 = Workspace
+
+; On exit:
+; If R1 =  0 then R0 = Sprite pixel value in &AABBGGRR format
+; If R1 >  0 then R0 = Sprite pixel value in &AABBGGRR format, R1 = Run chunk value (1..61)
+; If R1 = -1 then R0 = Ptr to Error block
+; All other registers preserved
+
+
+spr2qoi       FunctionSig
+
+    STMFD   R13!,{R2-R11,R14}
+
+; Registers:
+; R1  = QOI file handle
+; R5  = current pixel
+; R8  = run count
+; R9  = QOI file ptr
+; R10 = previous pixel
+; R11 = index and temporary register
+; R12 = Start of workspace
+; R14 = qoi_DataSize
+
+
+    ADD     R2,R12,#qoi_RunCount
+    LDMIA   R2,{R8,R9,R14}                ; qoi_RunCount, qoi_fptr, qoi_DataSize
+
+    LDR     R1,[R12,#qoi_fhandle]         ; Get QOI file handle
+    ; If no file handle (=0) then storing whole of QOI file in memory
+
+    CMP     R5,R10
+    BNE     skip_prev                     ; current pixel <> previous pixel
+
+    ; current pixel = previous pixel, so increment Run Count
+    ADD     R8,R8,#1                      ; IF current pixel (R5) = previous pixel (R10) THEN run += 1
+    TEQ     R8,#62                        ; IF (run <> 62)
+    BNE     endLoop                       ; then just update Run
+
+    ; Have reach Run limit of 62, so write Run chunk to cache
+
+doRun
+
+    CMP     R1,#0                         ; If no file handle then whole file is in memory OR calculating buffer size
+    BEQ     doRunInMemory
+
+    ADD     R9,R9,#1                      ; Increase buffer to keep track of size required
+    SUB     R8,R8,#1                      ; Create Run chunk in R0
+    ORR     R0,R8,#QOI_OP_RUN             ; R0 = QOI_OP_RUN OR (run-1)
+    MOV     R8,#0                         ; run = 0
+
+    ; Write to QOI cache. Assume we have enough space to write QOI data - will do flush later
+
+    LDR     R2,[R12,#qoi_CachePtr]        ; Get address of where to write next byte
+    LDR     R6,[R12,#qoi_CacheFree]       ; Get amount of freespace left in cache
+
+    ; Write Run chunk to cache
+    STRB    R0,[R2],#1
+    SUB     R6,R6,#1                      ; Decrement how much freespace left in cache
+    STR     R2,[R12,#qoi_CachePtr]        ; Update address of where to write next byte
+    STR     R6,[R12,#qoi_CacheFree]       ; Update amount of freespace in cache
+
+    B       endLoop
+
+
+doRunInMemory
+    ; Check QOI buffer is large enough (qoiData < qoiDataSize)
+
+    SUBS    R14,R14,#1                    ; qoiDataSize -= 1
+    MOVMIS  R14,#0                        ; if R14 -ve then clamp R14 = 0 setting Z flag. If R14 = 0 then Z flag already set
+    ADDEQ   R9,R9,#1                      ; Increase buffer to keep track of size required
+    ; IF writeQOI% THEN
+    SUBNE   R8,R8,#1                      ; Create Run chunk in R0
+    ORRNE   R8,R8,#QOI_OP_RUN             ; R8 = QOI_OP_RUN% OR (run-1)
+    STRNEB  R8,[R9],#1
+    MOV     R8,#0                         ; run = 0
+    B       endLoop
+
+
+skip_prev                                 ; pixel <> previous pixel
+
+    ; pixel has changed, and if we were in the middle of a run then need to write it out QOI_OP_RUN
+    ; and reset run count
+    CMP     R8,#0
+    BEQ     calc_colourhash               ; not in a Run so process current pixel
+
+
+doRun2                                    ; IF run > 0 THEN write out Run chunk
+
+    CMP     R1,#0                         ; If no file handle then whole file is in memory OR calculating buffer size
+    BEQ     doRun2InMemory
+
+    ADD     R9,R9,#1                      ; Increase buffer to keep track of size required
+    SUB     R8,R8,#1                      ; Create Run chunk in R0
+    ORR     R0,R8,#QOI_OP_RUN             ; R0 = QOI_OP_RUN OR (run-1)
+    MOV     R8,#0                         ; run = 0
+
+    ; Write to QOI cache. Assume we have enough space to write QOI data - will do flush later
+    LDR     R2,[R12,#qoi_CachePtr]        ; Get address of where to write next byte
+    LDR     R6,[R12,#qoi_CacheFree]       ; Get amount of freespace left in cache
+
+    ; Write Run chunk to cache
+    STRB    R0,[R2],#1
+    SUB     R6,R6,#1                      ; Decrement how much freespace left in cache
+    STR     R2,[R12,#qoi_CachePtr]        ; Update address of where to write next byte
+    STR     R6,[R12,#qoi_CacheFree]       ; Update amount of freespace in cache
+
+    ; and continue to process current pixel
+    B       calc_colourhash
+
+
+doRun2InMemory
+
+    ; Check QOI buffer is large enough (qoiData < qoiDataSize)
+    SUBS    R14,R14,#1                    ; qoiDataSize -= 1
+    MOVMIS  R14,#0                        ; if R14 -ve then clamp R14 = 0 setting Z flag. If R14 = 0 then Z flag already set
+    ADDEQ   R9,R9,#1                      ; Increase buffer to keep track of size required
+    ; IF writeQOI% THEN
+    SUBNE   R8,R8,#1                      ; Create Run chunk in R0
+    ORRNE   R8,R8,#QOI_OP_RUN             ; R8 = QOI_OP_RUN OR (run-1)
+    STRNEB  R8,[R9],#1
+    MOV     R8,#0                         ; run = 0
+
+    ; Drop through to calc_colourhash to process current pixel
+
+
+calc_colourhash
+    ; index_pos% = FNqoi_colour_hash(pixel%) MOD 64
+    ; colour_hash (R6) = rgba.r*3 + rgba.g*5 + rgba.b*7 + rgba.a*11
+    ; Uses 3 registers - R0, R3, R4
+    AND     R3,R5,#&0000FF                ; px?0
+    AND     R4,R5,#&00FF00                ; px?1
+    ADD     R0,R3,R3,LSL#1                ; R0 = 3 * px?0
+    ADD     R3,R4,R4,LSL#2                ; R3 = 5 * px?1
+    ADD     R4,R0,R3,LSR#8                ; Running total in R4
+    AND     R0,R5,#&FF0000                ; px?2
+    RSB     R3,R0,R0,LSL#3                ; R3 = 7 * px?2
+    ADD     R0,R4,R3,LSR#16               ; Running total now in R0
+    MOV     R4,R5,LSR#24                  ; px?3
+    ADD     R3,R0,R4,LSL#3                ; 8 * px?3 ; Running total now in R3
+    ADD     R0,R3,R4,LSL#1                ; 2 * px?3 ; Running total now in R0
+    ADD     R3,R0,R4                      ; 1 * px?3 l Running total now in R3
+    AND     R6,R3,#63                     ; MOD 64 ; R6 = index_pos%
+
+  IF QOI_INDEX <= &FF
+    ADD     R11,R12,#QOI_INDEX            ; Start of Index array
+  ELSE
+    ADD     R11,R12,#QOI_INDEX:AND:&FF00
+    ADD     R11,R11,#QOI_INDEX:AND:&00FF
+  ENDIF
+
+    LDR     R0,[R11,R6,LSL#2]             ; R11 = index ; R6 = index_pos%
+    CMP     R0,R5
+
+    BNE     notIndex                      ; Value in Index <> current pixel, so is RGB/A, Luma or Diff
+
+
+doIndex                                   ; IF !(index%+(index_pos%*4)) = pixel% THEN
+
+    CMP     R1,#0                         ; If no file handle then whole file is in memory OR calculating buffer size
+    BEQ     doIndexInMemory
+
+    ADD     R9,R9,#1                      ; Increase buffer to keep track of size required
+    ORR     R0,R6,#QOI_OP_INDEX           ; R0 = QOI_OP_INDEX OR index_pos
+
+    ; Write to QOI cache. Assume we have enough space to write QOI data - will do flush later
+    LDR     R2,[R12,#qoi_CachePtr]        ; Get address of where to write next byte
+    LDR     R6,[R12,#qoi_CacheFree]       ; Get amount of freespace left in cache
+
+    ; Write Index chunk to cache
+    STRB    R0,[R2],#1
+    SUB     R6,R6,#1                      ; Decrement how much freespace left in cache
+    STR     R2,[R12,#qoi_CachePtr]        ; Update address of where to write next byte
+    STR     R6,[R12,#qoi_CacheFree]       ; Update amount of freespace in cache
+
+    B       endLoop
+
+
+doIndexInMemory
+
+    ; Check QOI buffer is large enough (qoiData < qoiDataSize)
+    SUBS    R14,R14,#1                    ; qoiDataSize -= 1
+    MOVMIS  R14,#0                        ; if R14 -ve then clamp R14 = 0 setting Z flag. If R14 = 0 then Z flag already set
+    ADDEQ   R9,R9,#1                      ; Increase buffer to keep track of size required
+    ; IF writeQOI% THEN
+    ORRNE   R0,R6,#QOI_OP_INDEX           ; R0 = QOI_OP_INDEX OR index_pos
+    STRNEB  R0,[R9],#1
+
+    B       endLoop
+
+
+notIndex                                  ; Is RGB/A, Luma or Diff
+
+    STR     R5,[R11,R6,LSL#2]             ; R11 = index ; R6 = index_pos% ; !(index%+(index_pos%*4)) = pixel%
+
+    AND     R0,R5, #&FF000000             ; px.a
+    AND     R3,R10,#&FF000000             ; px_prev.a
+    CMP     R0,R3                         ; IF (pixel%.a) = (prev_pixel%.a) THEN
+    MOVNE   R11,#QOI_OP_RGBA
+    MOVNE   R0,#5                         ; Number of bytes to write
+    BNE     doRGB_A                       ; Alpha bytes match
+
+    ; vr%, vg%, vb% are signed chars, so need to sign extend the byte, so for example: 255 becomes -1
+    ; and then Diff and Luma will work correctly
+
+    MOV     R0,R5,LSL#24
+    MOV     R0,R0,ASR#24                  ; sign extend px.r
+    MOV     R3,R10,LSL#24
+    MOV     R3,R3,ASR#24                  ; sign extend px_prev.r
+    SUB     R4,R0,R3                      ; R4 = vr% = px.r - px_prev.r
+    ; signed char
+    MOV     R4,R4,LSL#24
+    MOV     R4,R4,ASR#24
+
+    MOV     R0,R5,LSL#16
+    MOV     R0,R0,ASR#24                  ; sign extend px.g
+    MOV     R3,R10,LSL#16
+    MOV     R3,R3,ASR#24                  ; sign extend px_prev.g
+
+    SUB     R11,R0,R3                     ; R11 = vg% = px.g - px_prev.g
+    ; signed char
+    MOV     R11,R11,LSL#24
+    MOV     R11,R11,ASR#24
+
+    MOV     R0,R5,LSL#8
+    MOV     R0,R0,ASR#24                  ; sign extend px.b
+    MOV     R3,R10,LSL#8
+    MOV     R3,R3,ASR#24                  ; sign extend px_prev.b
+
+    SUB     R3,R0,R3                      ; R3 = vb% = px.b - px_prev.b
+    ; signed char
+    MOV     R3,R3,LSL#24
+    MOV     R3,R3,ASR#24
+
+    CMN     R4,#3                         ; IF (vr% > -3)
+    BLE     doLuma                        ; signed Lower or Same
+    CMP     R4,#2                         ; AND (vr% < 2)
+    BGE     doLuma                        ; signed Greater than or Same
+    CMN     R11,#3                        ; AND (vg% > -3)
+    BLE     doLuma
+    CMP     R11,#2                        ; AND (vg% < 2)
+    BGE     doLuma
+    CMN     R3,#3                         ; AND (vb% > -3)
+    BLE     doLuma
+    CMP     R3,#2                         ; AND (vb% < 2)
+    BGE     doLuma
+
+
+doDiff
+
+    CMP     R1,#0                         ; If no QOI file handle then whole file is in memory OR calculating buffer size
+    BEQ     doDiffInMemory
+
+    ADD     R9,R9,#1                      ; Increase buffer to keep track of size required
+
+    ADD     R4,R4,#2                      ; (vr% + 2)
+    ; signed char
+    MOV     R4,R4,LSL#4                   ; (vr% + 2) << 4
+    AND     R4,R4,#&FF                    ; Do AND as we ORR below
+
+    ADD     R11,R11,#2                    ; (vg% + 2)
+    ; signed char
+    MOV     R11,R11,LSL#2                 ; (vg% + 2) << 2
+    AND     R11,R11,#&FF                  ; Do AND as we ORR below
+
+    ADD     R3,R3,#2                      ; (vb% + 2)
+    ; signed char
+    AND     R3,R3,#&FF                    ; Do AND as we ORR below
+
+    ORR     R0,R3,#QOI_OP_DIFF            ; QOI_OP_DIFF OR (vb% + 2)
+    ORR     R0,R0,R4                      ; QOI_OP_DIFF OR ((vr% + 2) << 4) OR (vb% + 2)
+    ORR     R0,R0,R11                     ; QOI_OP_DIFF OR ((vr% + 2) << 4) OR ((vg% + 2) << 2) OR (vb% + 2)
+
+    ; Write to QOI cache. Assume we have enough space to write QOI data - will do flush later
+    LDR     R2,[R12,#qoi_CachePtr]        ; Get address of where to write next byte
+    LDR     R6,[R12,#qoi_CacheFree]       ; Get amount of freespace left in cache
+
+    ; Write Diff chunk to cache
+    STRB    R0,[R2],#1
+    SUB     R6,R6,#1                      ; Decrement how much freespace left in cache
+    STR     R2,[R12,#qoi_CachePtr]        ; Update address of where to write next byte
+    STR     R6,[R12,#qoi_CacheFree]       ; Update amount of freespace in cache
+
+    B       endLoop
+
+
+doDiffInMemory
+
+    ; Check QOI buffer is large enough (qoiData < qoiDataSize)
+    SUBS    R14,R14,#1                    ; qoiDataSize -= 1
+    MOVMIS  R14,#0                        ; if R14 -ve then clamp R14 = 0 setting Z flag. If R14 = 0 then Z flag already set
+    ADDEQ   R9,R9,#1                      ; Increase buffer to keep track of size required
+
+    ; IF writeQOI% THEN
+    ADDNE   R4,R4,#2                      ; (vr% + 2)
+    ; signed char
+    MOVNE   R4,R4,LSL#4                   ; (vr% + 2) << 4
+    AND     R4,R4,#&FF                    ; Do AND as we ORR below
+
+    ADDNE   R11,R11,#2                    ; (vg% + 2)
+    ; signed char
+    MOVNE   R11,R11,LSL#2                 ; (vg% + 2) << 2
+    AND     R11,R11,#&FF                  ; Do AND as we ORR below
+
+    ADDNE   R3,R3,#2                      ; (vb% + 2)
+    ; signed char
+    AND     R3,R3,#&FF                    ; Do AND as we ORR below
+
+    ORRNE   R0,R3,#QOI_OP_DIFF            ; QOI_OP_DIFF OR (vb% + 2)
+    ORRNE   R0,R0,R4                      ; QOI_OP_DIFF OR ((vr% + 2) << 4) OR (vb% + 2)
+    ORRNE   R0,R0,R11                     ; QOI_OP_DIFF OR ((vr% + 2) << 4) OR ((vg% + 2) << 2) OR (vb% + 2)
+    STRNEB  R0,[R9],#1
+
+    B       endLoop
+
+
+doLuma
+
+    SUB     R4,R4,R11                     ; R4 = vg_r% = vr% - vg%
+    ; signed char
+    MOV     R4,R4,LSL#24
+    MOV     R4,R4,ASR#24
+
+    SUB     R3,R3,R11                     ; R3 = vg_b% = vb% - vg%
+    ; signed char
+    MOV     R3,R3,LSL#24
+    MOV     R3,R3,ASR#24
+
+    CMN     R4,#9                         ; IF (vg_r% > -9)
+    BLE     doRGB                         ; signed Lower or Same
+    CMP     R4,#8                         ; AND (vg_r% < 8)
+    BGE     doRGB                         ; signed Greater than or Same
+    CMN     R11,#33                       ; AND (vg% > -33)
+    BLE     doRGB
+    CMP     R11,#32                       ; AND (vg% < 32)
+    BGE     doRGB
+    CMN     R3,#9                         ; AND (vg_b% > -9)
+    BLE     doRGB
+    CMP     R3,#8                         ; AND (vg_b% < 8)
+    BGE     doRGB
+
+    CMP     R1,#0                         ; If no QOI file handle then whole file is in memory OR calculating buffer size
+    BEQ     doLumaInMemory
+
+    ADD     R9,R9,#2                      ; Increase buffer to keep track of size required
+
+    ADD     R11,R11,#32                   ; (vg% + 32)
+    ; signed char
+    AND     R11,R11,#&FF                  ; Do AND as we ORR below
+
+    ORR     R0,R11,#QOI_OP_LUMA           ; QOI_OP_LUMA OR (vg% + 32)
+    ADD     R11,R4,#8                     ; (vg_r% + 8)
+    ; signed char
+    MOV     R11,R11,LSL#4                 ; (vg_r% + 8) << 4
+    AND     R11,R11,#&FF                  ; Do AND as we ORR below
+
+    ADD     R3,R3,#8                      ; vg_b% + 8
+    ; signed char
+    AND     R3,R3,#&FF                    ; Do AND as we ORR below
+
+    ORR     R11,R11,R3                    ; ((vg_r% + 8) << 4) OR (vg_b% + 8)
+
+    ; Write to QOI cache. Assume we have enough space to write QOI data - will do flush later
+    LDR     R2,[R12,#qoi_CachePtr]        ; Get address of where to write next byte
+    LDR     R6,[R12,#qoi_CacheFree]       ; Get amount of freespace left in cache
+
+    ; Write Luma chunk to cache
+    STRB    R0,[R2],#1
+    STRB    R11,[R2],#1
+    SUB     R6,R6,#2                      ; Decrement how much freespace left in cache
+    STR     R2,[R12,#qoi_CachePtr]        ; Update address of where to write next byte
+    STR     R6,[R12,#qoi_CacheFree]       ; Update amount of freespace in cache
+
+    B       endLoop
+
+
+doLumaInMemory
+
+    ; Check QOI buffer is large enough (qoiData < qoiDataSize)
+    SUBS    R14,R14,#2                    ; qoiDataSize -= 2
+    MOVMIS  R14,#0                        ; if R14 -ve then clamp R14 = 0 setting Z flag. If R14 = 0 then Z flag already set
+    ADDEQ   R9,R9,#2                      ; Increase buffer to keep track of size required
+
+    ; IF writeQOI% THEN
+    ADDNE   R11,R11,#32                   ; (vg% + 32)
+    ; signed char
+    ANDNE   R11,R11,#&FF                  ; Do AND as we ORR below
+
+    ORRNE   R0,R11,#QOI_OP_LUMA           ; QOI_OP_LUMA OR (vg% + 32)
+    ADDNE   R11,R4,#8                     ; (vg_r% + 8)
+    ; signed char
+    MOVNE   R11,R11,LSL#4                 ; (vg_r% + 8) << 4
+    ANDNE   R11,R11,#&FF                  ; Do AND as we ORR below
+
+    ADDNE   R3,R3,#8                      ; vg_b% + 8
+    ; signed char
+    ANDNE   R3,R3,#&FF                    ; Do AND as we ORR below
+
+    ORRNE   R11,R11,R3                    ; ((vg_r% + 8) << 4) OR (vg_b% + 8)
+
+    STRNEB  R0,[R9],#1                    ; ?qoiData% = QOI_OP_LUMA OR (vg% + 32)
+    STRNEB  R11,[R9],#1                   ; ?qoiData% = ((vg_r% + 8) << 4) OR (vg_b% + 8)
+
+    B       endLoop
+
+
+doRGB
+
+    MOV     R11,#QOI_OP_RGB
+    MOV     R0,#4                         ; Number of bytes to write
+
+    ; Drop through to doRGB_A
+
+
+doRGB_A
+
+    CMP     R1,#0                         ; If no QOI file handle then whole file is in memory OR calculating buffer size
+    BEQ     doRGBInMemory
+
+    ADD     R9,R9,R0                      ; Increase buffer to keep track of size required
+
+    ; Write to QOI cache. Assume we have enough space to write QOI data - will do flush later
+    LDR     R2,[R12,#qoi_CachePtr]        ; Get address of where to write next byte
+    LDR     R6,[R12,#qoi_CacheFree]       ; Get amount of freespace left in cache
+
+    ; Write RGB/A chunk to cache
+    STRB    R11,[R2],#1                   ; ?qoiData% = R11 (QOI_OP_RGBA or QOI_OP_RGB)
+    SUB     R6,R6,R0                      ; Decrement how much freespace left in cache (-4 (RGB) or -5 (RGBA))
+    STRB    R5,[R2],#1                    ; ?qoiData% = px.r
+    MOV     R0,R5,LSR#8
+    STRB    R0,[R2],#1                    ; ?qoiData% = px.g
+    MOV     R0,R5,LSR#16
+    STRB    R0,[R2],#1                    ; ?qoiData% = px.b
+
+    ; only write rgba.a if RGBA
+    CMP     R11,#QOI_OP_RGBA
+    MOVEQ   R0,R5,LSR#24
+    STREQB  R0,[R2],#1                    ; ?qoiData% = px.a
+    STR     R2,[R12,#qoi_CachePtr]        ; Update address of where to write next byte
+    STR     R6,[R12,#qoi_CacheFree]       ; Update amount of freespace in cache
+
+    B       endLoop
+
+
+doRGBInMemory
+
+    ; Check QOI buffer is large enough (qoiData < qoiDataSize)
+    SUBS    R14,R14,R0                    ; qoiDataSize -= (4 (RGB) or 5 (RGBA))
+    MOVMIS  R14,#0                        ; If R14 -ve then clamp R14 = 0 setting Z flag. If R14 = 0 then Z flag already set
+    ADDEQ   R9,R9,R0                      ; Increase buffer to keep track of size required
+    BEQ     endLoop
+    ; IF writeQOI% THEN
+
+    STRB    R11,[R9],#1                   ; ?qoiData% = R11 (QOI_OP_RGBA or QOI_OP_RGB)
+    ; R9 is not word aligned so store a byte at a time
+    STRB    R5,[R9],#1                    ; ?qoiData% = px.r
+    MOV     R0,R5,LSR#8
+    STRB    R0,[R9],#1                    ; ?qoiData% = px.g
+    MOV     R0,R5,LSR#16
+    STRB    R0,[R9],#1                    ; ?qoiData% = px.b
+    ; only write rgba.a if RGBA
+    CMP     R11,#QOI_OP_RGBA
+    MOVEQ   R0,R5,LSR#24
+    STREQB  R0,[R9],#1                    ; ?qoiData% = px.a
+
+    ; Drop through to endLoop
+
+
+endLoop
+
+    CMP     R1,#0                         ; If no QOI file handle then whole file is in memory OR calculating buffer size
+    BEQ     %FT10
+
+    ; Flush QOI cache if < 9 bytes left in cache (Worst case if next output is Run+Footer)
+
+    LDR     R3,[R12,#qoi_CacheFree]       ; Get amount of freespace left in cache - Need at least 9 bytes
+    CMP     R3,#9                         ; If not enough (9 bytes for Run+Footer) freespace left then flush the cache to disk
+    BHS     %FT10
+
+    ; Write cache to disc - at current file pointer
+    LDR     R2,[R12,#qoi_CacheAddr]       ; Address of cache for QOI
+    LDR     R3,[R12,#qoi_CachePtr]        ; Get address of where in cache to write QOI data
+    LDR     R6,[R12,#cache_size]          ; Get size of QOI cache
+    SUB     R3,R3,R2                      ; Amount of data to write to current pointer
+
+    STR     R2,[R12,#qoi_CachePtr]        ; Reset address of where in cache to write QOI data to start of cache
+    STR     R6,[R12,#qoi_CacheFree]       ; Reset freespace in cache to the whole cache
+    MOV     R0,#2
+    SWI     XOS_GBPB
+    MOVVS   R1,#-1
+    LDMVSFD R13!,{R2-R11,PC}              ; Error? then exit with R0 = Error block, R1 = -1
+
+10
+    ; Save QOI processing data
+
+    ADD     R2,R12,#qoi_RunCount
+    STMIA   R2,{R8,R9,R14}                ; qoi_RunCount, qoi_fptr, qoi_DataSize
+
+    ; Store current pixel value for next time round
+    CMP     R8,#0                         ; Don't bother storing if in a Run (R8 > 0) as we've already done it
+    STREQ   R5,[R12,#pixel_start]
+
+    MOV     R0,R5                         ; Return pixel value in R0
+    MOV     R1,R8                         ; Run count
+
+    LDMFD   R13!,{R2-R11,PC}              ; And return
+
+
+
+;-------------------------- Write QOI footer -----------------------------;
+
+err_bufSize
+    DCD     255
+    DCB     "Buffer is too small to hold the QOI file",0
+    ALIGN
+
+
+writeFooter   FunctionSig
+
+    ; If using a cache, need to make sure that cache is flushed to disc
+    ;   we then check if we're in a Run, and if so to write the Run chunk to disc
+    ;   and then finally to write the footer to disc.
+    ;   We write direct to disc so we don't have to worry about whether we have enough space in the cache.
+
+    ; If storing the whole QOI file in memory then we check if we're in a Run, and if so to add the Run chunk
+    ;   and then to add the footer, returning the buffer size used in R1.
+
+    ; On exit:
+    ; If buffer supplied is more than needed or just enough, then R0 = 0, R1 = size of buffer required
+    ; If buffer supplied is smaller than needed, then R0 = Ptr to error block (err_BufSize), R1 = size of buffer required
+    ; If error then R0 = Ptr to error block, R1 = -1 (Only get an error if using a cache)
+
+; Registers:
+; R1  = QOI file handle
+; R2  = Address of cache for QOI
+; R3  = Address of where to write next byte in cache
+; R12 = Workspace
+; R14 = Link Return Address
+
+
+    LDR     R0,[R12,#qoi_RunCount]        ; run count
+    LDR     R1,[R12,#qoi_fhandle]         ; QOI file handle
+    CMP     R1,#0                         ; If no QOI file handle then whole file is in memory
+    BEQ     footer_in_memory
+
+    ; Know we have at least 9 bytes available in the cache, so check for Run and write Run chunk if so
+    ; and then write footer to cache, then flush the cache to disc.
+
+    ; Check if we have a Run in progress at end of file
+
+    LDR     R2,[R12,#qoi_CacheAddr]       ; Address of cache for QOI
+    LDR     R3,[R12,#qoi_CachePtr]        ; Get address of where to write next byte
+
+    CMP     R0,#0
+    BEQ     %FT72
+
+    SUB     R0,R0,#1                      ; Create Run chunk
+    ORR     R0,R0,#QOI_OP_RUN             ; R0 = QOI_OP_RUN OR (run%-1)
+
+    ; Write Run chunk to cache
+    STRB    R0,[R3],#1
+
+72
+    ; QOI buffer may not be word aligned so need to write footer a byte at a time
+    MOV     R0,#0
+
+    ; Write to QOI cache
+
+    ; QOI_FOOTER_1 = &00000000
+    STRB    R0,[R3],#1
+    STRB    R0,[R3],#1
+    STRB    R0,[R3],#1
+    STRB    R0,[R3],#1
+    ; QOI_FOOTER_2 = &00000001
+    STRB    R0,[R3],#1
+    STRB    R0,[R3],#1
+    STRB    R0,[R3],#1
+    MOV     R0,#1
+    STRB    R0,[R3],#1
+
+    SUB     R3,R3,R2                      ; Amount of data to write to current pointer
+    MOV     R0,#2
+    SWI     XOS_GBPB
+    MOVVS   R1,#-1
+
+    MOVVC   R0,#0                         ; Buffer size is more than needed or just enough
+    MOVVC   R1,R4                         ; Actual size of buffer required = QOI File Ptr
+
+    MOV     PC,R14                        ; Return
+
+
+footer_in_memory    FunctionSig
+
+    ; Storing the whole QOI file in memory then we check if we're in a Run, and if so to add the Run chunk
+    ; and then to add the footer, returning the buffer size used in R1.
+
+    ; On exit:
+    ; If buffer supplied is more than needed or just enough, then R0 = 0. R1 = size of buffer required
+    ; If buffer supplied is smaller than needed, then R0 <> 0. R1 = size of buffer required
+
+; Registers:
+; R0  = run count
+; R3  = qoiData%
+; R4  = qoiDataSize%
+; R5  = qoiBuffer% = Address of QOI buffer
+; R6  = QOIsize% = Size of QOI Buffer
+; R12 = Workspace
+; R14 = Link Return
+
+    ADD     R7,R12,#qoi_fptr
+    LDMIA   R7,{R3,R4,R5,R6}              ; qoi_fptr, qoi_DataSize, qoi_BufAddr, qoi_BufSize
+
+    ; Check if we have a Run in progress at end of file
+
+    CMP     R0,#0
+    BEQ     %FT72
+
+    SUBS    R4,R4,#1                      ; qoiDataSize -= 1
+    MOVMIS  R4,#0                         ; if R4 -ve then clamp R4 = 0 setting Z flag. If R4 = 0 then Z flag already set
+    ADDEQ   R3,R3,#1                      ; Increase buffer to keep track of size required
+    ; IF writeQOI% THEN
+    SUBNE   R0,R0,#1                      ; Create Run chunk
+    ORRNE   R0,R0,#QOI_OP_RUN             ; R0 = QOI_OP_RUN OR (run-1)
+    STRNEB  R0,[R3],#1
+
+72
+
+    SUBS    R4,R4,#QOI_FOOTER_SIZE        ; qoiDataSize -= QOI_FOOTER_SIZE
+
+    ; When we get here there should be just enough space left in the buffer for QOI_FOOTER_SIZE
+    ; which means that R4 will = 0 (or +ve if buffer is larger than required)
+
+    ADDMI   R3,R3,#QOI_FOOTER_SIZE        ; Increase buffer to keep track of size required
+
+    ; IF writeQOI% THEN
+    ; QOI buffer may not be word aligned so need to write footer a byte at a time
+    MOVPL   R0,#0
+    ; QOI_FOOTER_1 = &00000000
+    STRPLB  R0,[R3],#1
+    STRPLB  R0,[R3],#1
+    STRPLB  R0,[R3],#1
+    STRPLB  R0,[R3],#1
+    ; QOI_FOOTER_2 = &00000001
+    STRPLB  R0,[R3],#1
+    STRPLB  R0,[R3],#1
+    STRPLB  R0,[R3],#1
+    MOVPL   R0,#1
+    STRPLB  R0,[R3],#1
+
+    STR     R3,[R12,#qoi_fptr]            ; File position = File size
+
+    ; Now work out if buffer supplied was large enough
+    SUB     R1,R3,R5                      ; R1 = File size - qoi_BufAddr = Size of QOI buffer used/required
+    SUBS    R2,R1,R6                      ; R0 = R1 - qoi_BufSize, Indicates if buffer sufficient or not ...
+
+    ; if R1 < R6 (R0 -ve) then size of QOI buffer is more than required, so return 0
+    ; if R1 = R6 (R0 = 0) then size of QOI buffer is correct, so return 0
+    ; if R1 > R6 (R0 +ve) then size of QOI buffer required > size specified, so return size required (R1) and error block in R0
+
+    MOVLE   R0,#0                         ; Buffer size is more than needed or just enough
+    ADRGTL  R0,err_bufSize                ; Return error block as buffer is too small
+
+    ; R1 = size of QOI buffer used/required
+
+    MOV     PC,R14                        ; Return
+
+
+    END
+

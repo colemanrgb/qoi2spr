@@ -1,0 +1,23 @@
+| Convert between QOI and Sprite files
+| !Boot
+
+If "<Boot$OSVersion>" < "400" Then Set Qoi2Spr$Sprites !Sprites Else Set Qoi2Spr$Sprites 5Sprites
+If "<Qoi2Spr$Dir>" = "" Then IconSprites <Obey$Dir>.<Qoi2Spr$Sprites>
+Unset Qoi2Spr$Sprites
+
+If "<Qoi2Spr$Dir>" = "" Then Set Qoi2Spr$Dir <Obey$Dir>
+
+| Find our resources and set <Qoi2Spr$Path>
+If "<Qoi2Spr$Path>" = "" Then Run <Qoi2Spr$Dir>.Resources.ResFinder Qoi2Spr
+
+| Set up Application Info Variables
+If "<Qoi2Spr$Help>" = "" Then Obey Qoi2Spr:AppVars
+
+Set File$Type_A61 QOI
+If "<Alias$@RunType_A61>" = "" Then Set Alias$@RunType_A61 Run <Qoi2Spr$Dir>.!Run %%*0
+If "<Boot$OSVersion>" < "500"  Then DOSMap QOI &A61
+
+| Set up an alias to make it easy to use on the cmd line
+| To use Dynamic Areas instead of Wimpslot then add "-da <N>", where <N> is max size of Area in MB, eg: -da 64
+
+If "<Alias$Qoi2Spr>" = "" Then Set Alias$Qoi2Spr Run <Qoi2Spr$Dir>.!RunImage %%*0

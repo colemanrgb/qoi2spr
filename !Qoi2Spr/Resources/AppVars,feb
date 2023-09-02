@@ -1,0 +1,10 @@
+| Convert between QOI and Sprite images
+| Set up Application Info Variables
+
+Set Qoi2Spr$Title       "QOI to Sprite"
+Set Qoi2Spr$Description "Convert between QOI and Sprite images"
+Set Qoi2Spr$Publisher   "Richard Coleman"
+Set Qoi2Spr$Web         "https://coleman.orpheusweb.co.uk/pages/software.html"
+Set Qoi2Spr$Version     "1.00"
+Set Qoi2Spr$Help        <Qoi2Spr$Dir>.!Help
+

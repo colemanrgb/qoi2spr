@@ -1,0 +1,90 @@
+BASSwitch version 1.00
+Copyright © 7th software, 2004
+All rights reserved.
+
+ABOUT
+
+BASSwitch is a utility which allows processing of tokenised BASIC programs
+from one location to another, removing sections as dictated by conditions in
+the program being processed.
+
+COMMAND LINE SYNTAX
+
+  *BASSwitch <input> <output> [-Switches <switches>] [-Remove]
+
+  where
+
+  <input>    is the input filename of the tokenised BASIC source program
+  <output>   is the filename of the tokenised BASIC destination program
+  <switches> is a list of variables to define for use in program conditions
+  -Remove    will strip any conditions found in the destination program
+
+The list of switches is used by BASSwitch to create some BASIC variables with
+specified values. These can then be referenced by conditions in the source
+program.
+
+PROGRAM SYNTAX
+
+  REM #if <expression>
+
+  If the BASIC expression, <expression>, evaluates to any non-zero value, the
+  code between this condition and the next will be dumped to the output file.
+  If it evaluates to zero, this code will not be dumped.
+
+  REM #else
+
+  The else condition is optional. If the expression evaluated to zero, the
+  code between this and the next condition will be dumped.
+
+  REM #end
+
+  The end condition marks the end of a conditional block of code.
+
+Conditional blocks can be nested up to ten levels deep. The REM must be the
+first statement on a line. It may have leading and trailing spaces.
+
+
+EXAMPLE
+
+Given the command line:
+
+  *BASSwitch !RunImage/src !RunImage -s "DEBUG=TRUE machine$=""Iyonix"""
+
+and the !RunImage/src file containing:
+
+  10 REM #if DEBUG
+  20 PRINT " This is a debug build "
+  30 REM #if machine$="Iyonix"
+  40 PRINT " for Iyonix machines only "
+  50 REM #else
+  60 PRINT " for non-Iyonix machines "
+  70 REM #end
+  80 REM #else
+  90 PRINT " This is a non-debug build "
+ 100 REM #end
+
+a !RunImage file will be produced containing:
+
+  10 REM #if DEBUG
+  20 PRINT " This is a debug build "
+  30 REM #if machine$="Iyonix"
+  40 PRINT " for Iyonix machines only "
+  50 REM #else
+  70 REM #end
+  80 REM #else
+ 100 REM #end
+
+However, if the -Remove parameter is also passed to BASSwitch, !RunImage will
+contain the following:
+
+  20 PRINT " This is a debug build "
+  40 PRINT " for Iyonix machines only "
+
+
+LICENSE
+
+The BASSwitch program is free software. You may use it or distribute it as
+you wish, provided it is not modified in any way. You cannot use this program
+in commercial distributions without the consent of the author.
+
+-- 7th software, 2004

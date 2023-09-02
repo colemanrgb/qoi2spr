@@ -1,0 +1,13 @@
+; Version
+;==================================================================================================
+
+               GBLS    PROG_NAME
+               GBLS    PROG_VERS
+               GBLS    PROG_DATE
+               GBLS    PROG_AUTHOR
+
+PROG_VERS      SETS    "1.00"
+PROG_DATE      SETS    "27 Aug 2023"
+PROG_AUTHOR    SETS    "Richard Coleman"
+
+               END

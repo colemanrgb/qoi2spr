@@ -1,0 +1,20 @@
+# !TransQoi UK Messages
+#
+Esc:Escape pressed, conversion aborted
+CantLoad:Not a QOI or a Sprite file
+NotOpenFile:Unable to open file '%0'
+NotWriteFile:Unable to write to file '%0'
+NotValidQ:'%0' is not a valid QOI file
+NoMemL:Not enough memory to load %0 file (Need %1bytes)
+NoMemC:Not enough memory to create %0 file (Need %1bytes)
+ErrPath:Invalid path '%0'
+PathTooLong:Expanded directory path too long, max length: 254 characters
+ErrFile:Invalid filename '%0'
+FileTooLong:Expanded filename too long, max length: 254 characters
+NoWildSrc:Wildcards are not allowed in <source>
+NoWildDest:Wildcards are not allowed in <destination>
+IsDir:'%0' is a directory
+IsImage:'%0' is an Image file
+NoFile:File '%0' not found
+NotRead:Owner read not allowed '%0'
+Sprite:Sprite '%0':
